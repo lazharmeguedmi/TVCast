@@ -24,7 +24,13 @@ final class Connection {
     private Connection() {
     }
 
+    /** Connected to the TV app in both directions (green). */
     static boolean isConnected() {
+        return state == CONNECTED;
+    }
+
+    /** Something can play: the TV app, or a fallback the user chose (orange). */
+    static boolean canSend() {
         return state == CONNECTED || state == OTHER_TARGET;
     }
 
@@ -44,20 +50,23 @@ final class Connection {
         new Thread(() -> {
             try {
                 PhoneServer.get(app); // the TV needs to reach this
+                // Always look for the TV app first
                 Target t = Target.current(app);
-                if (t != null && t.type != Target.APP) {
-                    state = OTHER_TARGET;
-                    tvName = t.label();
-                    detail = "";
-                    return;
-                }
-                if (t == null || search) {
+                if (t == null || t.type != Target.APP || search) {
                     Target.findAppsNow(app);
                     t = Target.current(app);
                 }
                 if (t == null || t.type != Target.APP) {
-                    state = NOT_FOUND;
-                    detail = "Open Lazhar TV Cast on the TV (same Wi-Fi as this phone), then tap Connect.";
+                    Target fb = Target.fallback(app);
+                    if (fb != null) {
+                        state = OTHER_TARGET;
+                        tvName = fb.label();
+                        detail = "Lazhar TV Cast app not found on the TV, so the " + fb.label()
+                                + " is used. Open the TV app and tap Connect to use it instead.";
+                    } else {
+                        state = NOT_FOUND;
+                        detail = "Open Lazhar TV Cast on the TV (same Wi-Fi as this phone), then tap Connect.";
+                    }
                     return;
                 }
                 String reply;

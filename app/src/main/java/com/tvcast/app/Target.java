@@ -149,17 +149,31 @@ final class Target {
 
     /** The target to use now, or null if no TV was found yet. */
     static Target current(Context ctx) {
-        String choice = prefs(ctx).getString(PREF_CHOICE, "auto");
-        if (!choice.equals("auto")) {
-            Target t = fromSpec(choice);
-            if (t != null && t.type == APP) {
-                for (TvApps.Tv tv : tvs) if (tv.host.equals(t.tv.host)) return app(tv);
-            }
-            if (t != null) return t;
+        SharedPreferences p = prefs(ctx);
+        if (!p.getBoolean("choice_v2", false)) {
+            // older versions could get stuck on the web browser; start fresh on the TV app
+            p.edit().putString(PREF_CHOICE, "auto").putBoolean("choice_v2", true).apply();
         }
+        String choice = p.getString(PREF_CHOICE, "auto");
+        Target chosen = choice.equals("auto") ? null : fromSpec(choice);
+        // The TV app always wins when it's found
         List<TvApps.Tv> list = tvs;
-        if (!list.isEmpty()) return app(list.get(0));
+        if (!list.isEmpty()) {
+            if (chosen != null && chosen.type == APP) {
+                for (TvApps.Tv tv : list) if (tv.host.equals(chosen.tv.host)) return app(tv);
+            }
+            if (chosen == null || chosen.type == APP) return app(list.get(0));
+        }
+        // No TV app: use an explicitly chosen fallback (TV media player / web browser)
+        if (chosen != null && chosen.type != APP) return chosen;
         return null;
+    }
+
+    /** The fallback (TV media player / web browser) the user picked, if any. */
+    static Target fallback(Context ctx) {
+        String choice = prefs(ctx).getString(PREF_CHOICE, "auto");
+        Target t = choice.equals("auto") ? null : fromSpec(choice);
+        return t != null && t.type != APP ? t : null;
     }
 
     static void choose(Context ctx, Target t) {
@@ -168,6 +182,50 @@ final class Target {
 
     private static SharedPreferences prefs(Context ctx) {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    /** Connect by typing the TV's IP address (for Wi-Fi routers that block automatic discovery). */
+    static void enterAddress(Activity a, Runnable changed) {
+        final android.widget.EditText input = new android.widget.EditText(a);
+        input.setHint("e.g. 192.168.1.154");
+        input.setInputType(android.text.InputType.TYPE_CLASS_PHONE);
+        Target last = fromSpec(prefs(a).getString(PREF_LAST_TV, null));
+        if (last != null && last.type == APP) input.setText(last.tv.host);
+        int pad = Math.round(20 * a.getResources().getDisplayMetrics().density);
+        android.widget.FrameLayout box = new android.widget.FrameLayout(a);
+        box.setPadding(pad, pad / 2, pad, 0);
+        box.addView(input);
+        new AlertDialog.Builder(a)
+                .setTitle("TV address")
+                .setMessage("Open Lazhar TV Cast on the TV — its address is shown under the menu "
+                        + "(📱 Phone / Mirror page).")
+                .setView(box)
+                .setPositiveButton("Connect", (d, w) -> {
+                    final String host = input.getText().toString().trim();
+                    final Context app = a.getApplicationContext();
+                    new Thread(() -> {
+                        TvApps.Tv tv = TvApps.probe(host, TvApps.HTTP_PORT);
+                        new Handler(Looper.getMainLooper()).post(() -> {
+                            if (tv == null) {
+                                android.widget.Toast.makeText(app, "No Lazhar TV Cast at " + host
+                                        + ". Check the address and that the TV app is open.",
+                                        android.widget.Toast.LENGTH_LONG).show();
+                                return;
+                            }
+                            List<TvApps.Tv> l = new ArrayList<>(tvs);
+                            l.removeIf(x -> x.host.equals(tv.host));
+                            l.add(0, tv);
+                            tvs = l;
+                            prefs(app).edit().putString(PREF_LAST_TV, app(tv).spec()).apply();
+                            choose(app, app(tv));
+                            android.widget.Toast.makeText(app, "Found " + tv.name,
+                                    android.widget.Toast.LENGTH_SHORT).show();
+                            if (changed != null) changed.run();
+                        });
+                    }).start();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /** "Play on" picker shared by all screens. */
@@ -187,11 +245,17 @@ final class Target {
         labels.add("🌐  TV web browser" + (url != null ? "  (open " + url + ")" : ""));
         options.add(null);
         labels.add("🔄  Search again");
+        options.add(null);
+        labels.add("⌨  Enter the TV's address (shown in the TV app)");
 
         new AlertDialog.Builder(a)
                 .setTitle("Play on")
                 .setItems(labels.toArray(new String[0]), (d, which) -> {
                     Target t = options.get(which);
+                    if (t == null && which == labels.size() - 1) {
+                        enterAddress(a, changed);
+                        return;
+                    }
                     if (t == null) {
                         discover(a, changed);
                         return;

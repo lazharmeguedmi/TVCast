@@ -118,6 +118,7 @@ public class MainActivity extends Activity {
     }
 
     private void connectNow() {
+        Target.choose(this, null); // back to the TV app
         Connection.check(this, true, true, this::onConnectionChanged);
     }
 
@@ -125,7 +126,7 @@ public class MainActivity extends Activity {
         refresh();
         if (waitingToSend && Connection.state != Connection.CHECKING) {
             waitingToSend = false;
-            if (Connection.isConnected()) mirrorToTv();
+            if (Connection.canSend()) mirrorToTv();
             else showNoTvDialog();
         }
     }
@@ -193,7 +194,7 @@ public class MainActivity extends Activity {
             return;
         }
         Target t = Target.current(this);
-        if (t == null || !Connection.isConnected()) {
+        if (t == null || !Connection.canSend()) {
             // Make sure we're really connected (both ways) before sending
             waitingToSend = true;
             Toast.makeText(this, "Connecting to your TV…", Toast.LENGTH_SHORT).show();
@@ -227,7 +228,7 @@ public class MainActivity extends Activity {
 
     private void mirrorScreen() {
         Target t = Target.current(this);
-        if (t == null || !Connection.isConnected()) {
+        if (t == null || !Connection.canSend()) {
             showNoTvDialog();
             return;
         }
@@ -275,8 +276,9 @@ public class MainActivity extends Activity {
                 sub = "Anything you pick plays on the TV";
                 break;
             case Connection.OTHER_TARGET:
-                color = C_GREEN;
-                label = "Using " + Connection.tvName;
+                color = "#F0883E";
+                label = "TV app not connected — using " + Connection.tvName;
+                sub = Connection.detail;
                 break;
             case Connection.ONE_WAY:
                 color = "#F0883E";
@@ -379,7 +381,8 @@ public class MainActivity extends Activity {
         changeTvBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         changeTvBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         changeTvBtn.setPadding(dp(32), 0, 0, 0);
-        changeTvBtn.setOnClickListener(v -> Target.showPicker(this, () -> connectNow()));
+        changeTvBtn.setOnClickListener(v -> Target.showPicker(this,
+                () -> Connection.check(this, false, false, this::onConnectionChanged)));
         tvCard.addView(changeTvBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
         LinearLayout.LayoutParams trp = full();
         trp.topMargin = dp(14);
