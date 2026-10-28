@@ -118,6 +118,15 @@ public final class TvApps {
                 + "&id=" + enc(id), 4000);
     }
 
+    /**
+     * Says hello to the TV. The TV records this phone as connected and checks it can reach the
+     * phone back on {@code phonePort}. Returns the TV's JSON reply ({"ok":true,"reverse":true|false,...}).
+     */
+    public static String hello(Tv tv, String phoneName, int phonePort, boolean announce) throws IOException {
+        return get(tv.base() + "hello?name=" + enc(phoneName) + "&port=" + phonePort
+                + (announce ? "&announce=1" : ""), 6000);
+    }
+
     public static void command(Tv tv, String cmd) throws IOException {
         get(tv.base() + cmd, 4000);
     }

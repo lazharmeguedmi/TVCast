@@ -128,16 +128,7 @@ public class CastService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
-        server = new CastServer(PORT);
-        try (InputStream in = getAssets().open("hls.min.js")) {
-            ByteArrayOutputStream bo = new ByteArrayOutputStream();
-            byte[] b = new byte[32 * 1024];
-            int n;
-            while ((n = in.read(b)) > 0) bo.write(b, 0, n);
-            server.setHlsJs(bo.toByteArray());
-        } catch (IOException ignored) {
-        }
-        server.start();
+        server = PhoneServer.get(this);
         worker = Executors.newSingleThreadScheduledExecutor();
         worker.scheduleWithFixedDelay(this::poll, 1, 1, TimeUnit.SECONDS);
 
@@ -369,7 +360,16 @@ public class CastService extends Service {
         }
     }
 
+    private int helloTick;
+
     private void pollApp(Target t) {
+        if (++helloTick % 5 == 0) {
+            // keep the TV showing "phone connected" while something is playing
+            try {
+                TvApps.hello(t.tv, Connection.phoneName(this), PORT, false);
+            } catch (IOException ignored) {
+            }
+        }
         String st;
         try {
             st = TvApps.status(t.tv);
@@ -420,7 +420,11 @@ public class CastService extends Service {
                 if (KIND_LIVE.equals(kind)) {
                     nextLiveSource(t);
                 } else {
-                    setStatus("The TV couldn't play this (" + TvApps.jsonField(st, "error") + ")", false);
+                    String code = String.valueOf(TvApps.jsonField(st, "error"));
+                    setStatus(code.contains("NETWORK") || code.contains("IO_")
+                            ? "The TV couldn't download the video from this phone (" + code + "). Tap Reconnect, "
+                            + "and turn off any VPN on the phone."
+                            : "The TV couldn't play this video (" + code + ")", false);
                 }
                 break;
             case "idle":
@@ -778,8 +782,7 @@ public class CastService extends Service {
         kind = "";
         worker.shutdown();
         if (server != null) {
-            server.shutdown();
-            server = null;
+            server.setMode(CastServer.MODE_IDLE); // the shared server keeps running for the app
         }
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();

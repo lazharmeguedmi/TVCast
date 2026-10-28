@@ -68,7 +68,28 @@ public class HomeActivity extends Activity {
     private final List<TextView> navViews = new ArrayList<>();
     private String current = "live";
 
-    private TextView headTitle, headSub, emptyView;
+    private TextView headTitle, headSub, emptyView, phoneStatus;
+
+    private final Runnable phoneTicker = new Runnable() {
+        @Override
+        public void run() {
+            updatePhoneStatus();
+            ui.postDelayed(this, 2000);
+        }
+    };
+
+    private void updatePhoneStatus() {
+        if (ReceiverService.phoneConnected()) {
+            boolean ok = ReceiverService.phoneReachable;
+            phoneStatus.setText((ok ? "●  " : "▲  ") + ReceiverService.phoneName
+                    + (ok ? " connected" : " — can't reach phone"));
+            phoneStatus.setTextColor(Color.parseColor(ok ? "#3FB950" : "#F0883E"));
+        } else {
+            phoneStatus.setText("○  No phone connected");
+            phoneStatus.setTextColor(Color.parseColor(C_MUTED));
+        }
+        if (current.equals("phone")) showPhone();
+    }
     private HorizontalScrollView chipsScroll;
     private LinearLayout chips;
     private ListView list;
@@ -101,6 +122,7 @@ public class HomeActivity extends Activity {
     protected void onResume() {
         super.onResume();
         ReceiverService.homeVisible = true;
+        ui.post(phoneTicker);
         // A command from the phone arrived while we were away: open the player.
         if (ReceiverService.pendingCmd != null) {
             startActivity(new Intent(this, TvActivity.class));
@@ -112,6 +134,7 @@ public class HomeActivity extends Activity {
     protected void onPause() {
         super.onPause();
         ReceiverService.homeVisible = false;
+        ui.removeCallbacks(phoneTicker);
     }
 
     // ---------------- data ----------------
@@ -552,11 +575,20 @@ public class HomeActivity extends Activity {
         headTitle.setText("From my phone");
         headSub.setText("Send videos, live TV or your screen from the phone app");
         phonePanel.setVisibility(View.VISIBLE);
-        phoneInfo.setText("✓  Ready — this TV is visible to your phone\n\n"
-                + "TV name:  " + ReceiverService.deviceName(this) + "\n"
-                + "Address:  " + ipAddress() + "\n\n"
-                + "On your phone, open Lazhar TV Cast, choose a video and tap “Mirror to my TV”.\n"
-                + "Anything you send plays here automatically — even while you're browsing channels.\n\n"
+        String state;
+        if (ReceiverService.phoneConnected() && ReceiverService.phoneReachable) {
+            state = "●  CONNECTED to " + ReceiverService.phoneName + " (" + ReceiverService.phoneIp + ")\n"
+                    + "Anything you send from the phone plays here automatically.";
+        } else if (ReceiverService.phoneConnected()) {
+            state = "▲  " + ReceiverService.phoneName + " is talking to this TV, but the TV can't reach the phone back,\n"
+                    + "so videos from the phone can't play. Turn off any VPN on the phone,\n"
+                    + "and make sure both are on the same Wi-Fi (not a guest network).";
+        } else {
+            state = "○  NOT CONNECTED\nOn your phone, open Lazhar TV Cast and tap \"Connect\".";
+        }
+        phoneInfo.setText(state + "\n\n"
+                + "This TV:  " + ReceiverService.deviceName(this) + "   ·   " + ipAddress() + "\n\n"
+                + "Keep Lazhar TV Cast open on the TV while sending from the phone.\n\n"
                 + "Phone app download:\nhttps://github.com/lazharmeguedmi/TVCast/releases/latest/download/TVCast.apk");
     }
 
@@ -620,8 +652,11 @@ public class HomeActivity extends Activity {
         side.setPadding(dp(14), dp(18), dp(14), dp(12));
         TextView brand = text("Lazhar TV Cast", 20, C_TEXT);
         brand.setTypeface(Typeface.DEFAULT_BOLD);
-        brand.setPadding(dp(10), 0, 0, dp(14));
+        brand.setPadding(dp(10), 0, 0, dp(4));
         side.addView(brand);
+        phoneStatus = text("○  No phone connected", 13, C_MUTED);
+        phoneStatus.setPadding(dp(10), 0, 0, dp(12));
+        side.addView(phoneStatus);
         for (String[] n : NAV) {
             TextView item = text(n[1], 16, C_TEXT);
             item.setTag(n[0]);

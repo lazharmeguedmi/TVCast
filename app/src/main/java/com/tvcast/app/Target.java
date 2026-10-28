@@ -127,6 +127,26 @@ final class Target {
         }).start();
     }
 
+    /** Looks for Lazhar TV Cast on the Wi-Fi right now (blocking, ~1.5 s). */
+    static List<TvApps.Tv> findAppsNow(Context ctx) {
+        Context app = ctx.getApplicationContext();
+        WifiManager wm = (WifiManager) app.getSystemService(Context.WIFI_SERVICE);
+        WifiManager.MulticastLock lock = wm != null ? wm.createMulticastLock("TVCast-find-now") : null;
+        try {
+            if (lock != null) lock.acquire();
+            List<String> known = new ArrayList<>();
+            Target last = fromSpec(prefs(app).getString(PREF_LAST_TV, null));
+            if (last != null && last.type == APP) known.add(last.tv.host);
+            List<TvApps.Tv> found = TvApps.find(1500, known);
+            tvs = found;
+            if (!found.isEmpty()) prefs(app).edit().putString(PREF_LAST_TV, app(found.get(0)).spec()).apply();
+            searchedOnce = true;
+            return found;
+        } finally {
+            if (lock != null && lock.isHeld()) lock.release();
+        }
+    }
+
     /** The target to use now, or null if no TV was found yet. */
     static Target current(Context ctx) {
         String choice = prefs(ctx).getString(PREF_CHOICE, "auto");

@@ -301,6 +301,8 @@ public class CastServer extends Thread {
                 }
             } else if (path.startsWith("/video/")) {
                 serveVideo(out, path, headers, head);
+            } else if (path.equals("/ping")) {
+                sendBytes(out, "200 OK", "application/json", "{\"app\":\"tvcast-phone\",\"ok\":true}".getBytes(), head);
             } else if (path.equals("/hls.js")) {
                 sendBytes(out, "200 OK", "application/javascript", hlsJs, head);
             } else if (path.startsWith("/live/")) {

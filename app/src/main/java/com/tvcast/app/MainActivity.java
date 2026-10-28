@@ -52,8 +52,15 @@ public class MainActivity extends Activity {
     private static String pendingName;
     private boolean waitingToSend;
 
-    private TextView tvStatus, errorView;
-    private Button changeTvBtn;
+    private TextView tvStatus, tvDetail, dot, errorView;
+    private Button changeTvBtn, connectBtn;
+    private final Runnable heartbeat = new Runnable() {
+        @Override
+        public void run() {
+            Connection.check(MainActivity.this, false, false, MainActivity.this::onConnectionChanged);
+            ui.postDelayed(this, 5000);
+        }
+    };
     // video picker
     private LinearLayout pickedBox;
     private ImageView thumb;
@@ -95,8 +102,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        Target.discover(this, this::onTvsFound);
+        PhoneServer.get(this);
+        Connection.check(this, Connection.state != Connection.CONNECTED, true, this::onConnectionChanged);
+        Target.discover(this, this::refresh); // also finds TV media players for "Change"
         ui.post(refresher);
+        ui.postDelayed(heartbeat, 5000);
         showPicked();
     }
 
@@ -104,6 +114,20 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         ui.removeCallbacks(refresher);
+        ui.removeCallbacks(heartbeat);
+    }
+
+    private void connectNow() {
+        Connection.check(this, true, true, this::onConnectionChanged);
+    }
+
+    private void onConnectionChanged() {
+        refresh();
+        if (waitingToSend && Connection.state != Connection.CHECKING) {
+            waitingToSend = false;
+            if (Connection.isConnected()) mirrorToTv();
+            else showNoTvDialog();
+        }
     }
 
     /** "Share → TV Cast" from Photos, Files, etc. */
@@ -169,13 +193,11 @@ public class MainActivity extends Activity {
             return;
         }
         Target t = Target.current(this);
-        if (t == null) {
-            if (Target.searching || !Target.searchedOnce) {
-                waitingToSend = true;
-                Toast.makeText(this, "Looking for your TV…", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            showNoTvDialog();
+        if (t == null || !Connection.isConnected()) {
+            // Make sure we're really connected (both ways) before sending
+            waitingToSend = true;
+            Toast.makeText(this, "Connecting to your TV…", Toast.LENGTH_SHORT).show();
+            Connection.check(this, t == null, false, this::onConnectionChanged);
             return;
         }
         startForegroundService(new Intent(this, CastService.class)
@@ -190,26 +212,14 @@ public class MainActivity extends Activity {
         refresh();
     }
 
-    private void onTvsFound() {
-        refresh();
-        if (waitingToSend && !Target.searching) {
-            waitingToSend = false;
-            mirrorToTv();
-        } else if (waitingToSend && Target.current(this) != null) {
-            waitingToSend = false;
-            mirrorToTv();
-        }
-    }
-
     private void showNoTvDialog() {
+        String why = Connection.state == Connection.ONE_WAY ? Connection.detail
+                : "Open the Lazhar TV Cast app on your TV (same Wi-Fi as this phone), then tap Connect.\n\n"
+                + "Don't have it on the TV yet? Open Downloader on the TV and enter:\n" + TV_APP_LINK;
         new AlertDialog.Builder(this)
-                .setTitle("TV not found")
-                .setMessage("Open the Lazhar TV Cast app on your TV (same Wi-Fi as this phone), then tap Search again.\n\n"
-                        + "Don't have it on the TV yet? Open Downloader on the TV and enter:\n" + TV_APP_LINK)
-                .setPositiveButton("Search again", (d, w) -> {
-                    waitingToSend = true;
-                    Target.discover(this, this::onTvsFound);
-                })
+                .setTitle(Connection.state == Connection.ONE_WAY ? "TV can't reach this phone" : "Not connected to the TV")
+                .setMessage(why)
+                .setPositiveButton("Connect", (d, w) -> connectNow())
                 .setNeutralButton("Other ways", (d, w) -> Target.showPicker(this, this::refresh))
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -217,7 +227,7 @@ public class MainActivity extends Activity {
 
     private void mirrorScreen() {
         Target t = Target.current(this);
-        if (t == null) {
+        if (t == null || !Connection.isConnected()) {
             showNoTvDialog();
             return;
         }
@@ -257,17 +267,40 @@ public class MainActivity extends Activity {
     // ---------------- refresh ----------------
 
     private void refresh() {
-        Target t = Target.current(this);
-        if (t != null) {
-            tvStatus.setText("📺  " + t.label());
-            tvStatus.setTextColor(Color.parseColor(t.type == Target.APP ? C_GREEN : C_TEXT));
-        } else if (Target.searching || !Target.searchedOnce) {
-            tvStatus.setText("Looking for your TV…");
-            tvStatus.setTextColor(Color.parseColor(C_MUTED));
-        } else {
-            tvStatus.setText("TV not found — open TV Cast on your TV");
-            tvStatus.setTextColor(Color.parseColor("#F0883E"));
+        String color, label, sub = "";
+        switch (Connection.state) {
+            case Connection.CONNECTED:
+                color = C_GREEN;
+                label = "Connected to " + Connection.tvName;
+                sub = "Anything you pick plays on the TV";
+                break;
+            case Connection.OTHER_TARGET:
+                color = C_GREEN;
+                label = "Using " + Connection.tvName;
+                break;
+            case Connection.ONE_WAY:
+                color = "#F0883E";
+                label = "Half connected to " + Connection.tvName;
+                sub = Connection.detail;
+                break;
+            case Connection.NOT_FOUND:
+                color = "#F85149";
+                label = "Not connected";
+                sub = Connection.detail;
+                break;
+            default:
+                color = C_MUTED;
+                label = "Connecting…";
+                break;
         }
+        dot.setTextColor(Color.parseColor(color));
+        tvStatus.setText(label);
+        tvDetail.setText(sub);
+        tvDetail.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+        boolean connected = Connection.isConnected();
+        connectBtn.setText(connected ? "Reconnect" : "Connect");
+        connectBtn.setTextColor(Color.parseColor(connected ? "#58A6FF" : "#FFFFFF"));
+        connectBtn.setBackground(connected ? null : rounded(C_BLUE, 10, null));
 
         String err = CastService.lastError;
         errorView.setText(err == null ? "" : err);
@@ -320,20 +353,37 @@ public class MainActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         col.addView(title);
 
-        // TV status row
+        // Connection card: ● Connected to <TV>   [Connect]
+        LinearLayout tvCard = new LinearLayout(this);
+        tvCard.setOrientation(LinearLayout.VERTICAL);
+        tvCard.setPadding(dp(14), dp(10), dp(8), dp(10));
+        tvCard.setBackground(rounded(C_CARD, 12, C_LINE));
         LinearLayout tvRow = new LinearLayout(this);
         tvRow.setOrientation(LinearLayout.HORIZONTAL);
         tvRow.setGravity(Gravity.CENTER_VERTICAL);
-        tvRow.setPadding(dp(14), dp(6), dp(6), dp(6));
-        tvRow.setBackground(rounded(C_CARD, 12, C_LINE));
-        tvStatus = text("Looking for your TV…", 15, C_MUTED);
+        dot = text("●", 22, C_MUTED);
+        dot.setPadding(0, 0, dp(10), 0);
+        tvRow.addView(dot);
+        tvStatus = text("Connecting…", 16, C_TEXT);
+        tvStatus.setTypeface(Typeface.DEFAULT_BOLD);
         tvRow.addView(tvStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        changeTvBtn = linkButton("Change");
-        changeTvBtn.setOnClickListener(v -> Target.showPicker(this, this::refresh));
-        tvRow.addView(changeTvBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        connectBtn = button("Connect", C_BLUE);
+        connectBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        connectBtn.setOnClickListener(v -> connectNow());
+        tvRow.addView(connectBtn, new LinearLayout.LayoutParams(dp(110), dp(40)));
+        tvCard.addView(tvRow);
+        tvDetail = text("", 13, C_MUTED);
+        tvDetail.setPadding(dp(32), dp(4), dp(8), 0);
+        tvCard.addView(tvDetail);
+        changeTvBtn = linkButton("Other ways to play (TV media player / web browser)");
+        changeTvBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        changeTvBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        changeTvBtn.setPadding(dp(32), 0, 0, 0);
+        changeTvBtn.setOnClickListener(v -> Target.showPicker(this, () -> connectNow()));
+        tvCard.addView(changeTvBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
         LinearLayout.LayoutParams trp = full();
         trp.topMargin = dp(14);
-        col.addView(tvRow, trp);
+        col.addView(tvCard, trp);
 
         errorView = text("", 14, "#F85149");
         errorView.setPadding(0, dp(10), 0, 0);

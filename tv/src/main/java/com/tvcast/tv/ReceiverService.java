@@ -36,6 +36,16 @@ public class ReceiverService extends Service implements CommandServer.Handler {
     /** The menus are on screen (the app is open and ready). */
     static volatile boolean homeVisible;
 
+    // The phone that's connected (it says hello every few seconds)
+    static volatile String phoneName = "";
+    static volatile String phoneIp = "";
+    static volatile long phoneSeenAt;
+    static volatile boolean phoneReachable;
+
+    static boolean phoneConnected() {
+        return System.currentTimeMillis() - phoneSeenAt < 12000;
+    }
+
     private static final String CHANNEL = "tvcast-tv";
     private final Handler main = new Handler(Looper.getMainLooper());
     private CommandServer server;
@@ -113,6 +123,16 @@ public class ReceiverService extends Service implements CommandServer.Handler {
             }
             return "{\"visible\":false,\"state\":\"idle\",\"id\":" + CommandServer.json(lastPlayId) + "}";
         }
+        if (cmd.equals("hello")) {
+            return hello(params);
+        }
+        if (cmd.equals("message") && p == null) {
+            final String text = params.get("text");
+            if (text != null && homeVisible) {
+                main.post(() -> android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show());
+            }
+            return "{\"ok\":true}";
+        }
         switch (cmd) {
             case "play":
             case "pause":
@@ -136,6 +156,44 @@ public class ReceiverService extends Service implements CommandServer.Handler {
             default:
                 return "{\"ok\":false,\"error\":\"unknown command\"}";
         }
+    }
+
+    /** Phone says hello: remember it and check the TV can reach the phone back (needed to play its videos). */
+    private String hello(Map<String, String> params) {
+        String ip = params.get("_ip");
+        String name = params.get("name");
+        int port = 8080;
+        try {
+            port = Integer.parseInt(params.get("port"));
+        } catch (Exception ignored) {
+        }
+        boolean reverse = false;
+        String reverseError = "";
+        try {
+            java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                    new java.net.URL("http://" + ip + ":" + port + "/ping").openConnection();
+            c.setConnectTimeout(3000);
+            c.setReadTimeout(3000);
+            reverse = c.getResponseCode() == 200;
+            c.disconnect();
+        } catch (Exception e) {
+            reverseError = e.getClass().getSimpleName();
+        }
+        boolean isNew = !phoneConnected() || !String.valueOf(ip).equals(phoneIp);
+        phoneName = name == null || name.isEmpty() ? "Phone" : name;
+        phoneIp = ip == null ? "" : ip;
+        phoneReachable = reverse;
+        phoneSeenAt = System.currentTimeMillis();
+        if (isNew && homeVisible && "1".equals(params.get("announce"))) {
+            final String n = phoneName;
+            main.post(() -> android.widget.Toast.makeText(this, "📱 " + n + " connected",
+                    android.widget.Toast.LENGTH_SHORT).show());
+        }
+        return "{\"ok\":true,\"name\":" + CommandServer.json(deviceName(this))
+                + ",\"reverse\":" + reverse
+                + ",\"reverseError\":" + CommandServer.json(reverseError)
+                + ",\"visible\":" + (homeVisible || player != null)
+                + ",\"yourIp\":" + CommandServer.json(phoneIp) + "}";
     }
 
     private void openPlayer() {

@@ -113,7 +113,9 @@ public class CommandServer {
             if (cmd.equals("info")) {
                 body = "{\"app\":\"tvcast-tv\",\"name\":" + json(name) + ",\"version\":1}";
             } else {
-                body = handler.handle(cmd, parseQuery(query));
+                Map<String, String> params = parseQuery(query);
+                params.put("_ip", s.getInetAddress().getHostAddress());
+                body = handler.handle(cmd, params);
             }
             byte[] b = body.getBytes(StandardCharsets.UTF_8);
             OutputStream out = s.getOutputStream();
