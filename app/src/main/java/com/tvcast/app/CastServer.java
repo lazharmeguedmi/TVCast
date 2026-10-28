@@ -47,6 +47,8 @@ public class CastServer extends Thread {
     public static final String MODE_VIDEO = "video";
     /** Video is playing in the TV's own media player (DLNA); the browser page just shows a note. */
     public static final String MODE_EXTERNAL = "external";
+    /** A live TV channel plays in the TV web browser page. */
+    public static final String MODE_LIVE = "live";
 
     public static final String DLNA_FEATURES =
             "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000";
@@ -80,6 +82,14 @@ public class CastServer extends Thread {
     private volatile boolean tvPaused = true;
     private volatile long tvReportAt;
 
+    // Live TV channel
+    private volatile LiveProxy.Channel live;
+    private volatile int liveId;
+    private volatile boolean liveFailed;     // no more sources to try
+    private volatile int liveErrorFor = -1;  // liveId the TV reported as not working
+    private volatile boolean livePlaying;
+    private volatile byte[] hlsJs = new byte[0];
+
     public CastServer(int port) {
         super("TVCast-HTTP");
         this.port = port;
@@ -112,6 +122,50 @@ public class CastServer extends Thread {
     public String videoPath() {
         VideoSource v = video;
         return "/video/" + videoId + extensionFor(v == null ? null : v.mimeType());
+    }
+
+    /** The hls.js player library, served to the TV at /hls.js. */
+    public void setHlsJs(byte[] js) {
+        hlsJs = js == null ? new byte[0] : js;
+    }
+
+    /** Starts (or clears, with null) a live channel. */
+    public void setLive(LiveProxy.Channel ch) {
+        live = ch;
+        liveId++;
+        liveFailed = false;
+        liveErrorFor = -1;
+        livePlaying = false;
+        tvReportAt = 0;
+    }
+
+    public LiveProxy.Channel live() {
+        return live;
+    }
+
+    /** Re-sends the current channel to the TV (after switching to another source). */
+    public void reloadLive() {
+        liveId++;
+        liveErrorFor = -1;
+        livePlaying = false;
+    }
+
+    public String livePath() {
+        LiveProxy.Channel ch = live;
+        return ch == null ? "" : "/live/" + ch.token + "/index.m3u8";
+    }
+
+    /** True once the TV said the current source doesn't work. */
+    public boolean liveErrorReported() {
+        return live != null && liveErrorFor == liveId;
+    }
+
+    public boolean livePlaying() {
+        return livePlaying && tvConnected();
+    }
+
+    public void setLiveFailed(boolean f) {
+        liveFailed = f;
     }
 
     public void sendCommand(String c) {
@@ -237,6 +291,10 @@ public class CastServer extends Thread {
                 }
             } else if (path.startsWith("/video/")) {
                 serveVideo(out, path, headers, head);
+            } else if (path.equals("/hls.js")) {
+                sendBytes(out, "200 OK", "application/javascript", hlsJs, head);
+            } else if (path.startsWith("/live/")) {
+                serveLive(out, path, query, headers, head);
             } else {
                 sendBytes(out, "404 Not Found", "text/plain", "not found".getBytes(), head);
             }
@@ -250,8 +308,22 @@ public class CastServer extends Thread {
     // ---------- status / report ----------
 
     private void handleReport(String query) {
-        if (query.isEmpty() || !MODE_VIDEO.equals(mode)) return;
+        if (query.isEmpty()) return;
         Map<String, String> p = parseQuery(query);
+        if (MODE_LIVE.equals(mode) && p.containsKey("live")) {
+            try {
+                int id = Integer.parseInt(p.get("live"));
+                if (id == liveId) {
+                    tvReportAt = System.currentTimeMillis();
+                    if ("1".equals(p.get("err"))) liveErrorFor = id;
+                    livePlaying = "1".equals(p.get("playing"));
+                    tvPaused = "1".equals(p.get("paused"));
+                }
+            } catch (NumberFormatException ignored) {
+            }
+            return;
+        }
+        if (!MODE_VIDEO.equals(mode)) return;
         try {
             if (p.containsKey("pos")) tvPos = Double.parseDouble(p.get("pos"));
             if (p.containsKey("dur")) tvDur = Double.parseDouble(p.get("dur"));
@@ -269,10 +341,21 @@ public class CastServer extends Thread {
             c = cmd;
         }
         VideoSource v = video;
+        LiveProxy.Channel ch = live;
+        if (MODE_LIVE.equals(mode)) {
+            return "{\"mode\":\"live\""
+                    + ",\"liveId\":" + liveId
+                    + ",\"url\":" + jsonString(ch != null ? livePath() : "")
+                    + ",\"title\":" + jsonString(ch != null ? ch.title : "")
+                    + ",\"failed\":" + liveFailed
+                    + ",\"cmdSeq\":" + seq
+                    + ",\"cmd\":" + jsonString(c)
+                    + "}";
+        }
         return "{\"mode\":\"" + mode + "\""
                 + ",\"videoId\":" + videoId
                 + ",\"url\":" + jsonString(v != null ? videoPath() : "")
-                + ",\"title\":" + jsonString(v != null ? v.title() : "")
+                + ",\"title\":" + jsonString(v != null ? v.title() : (ch != null ? ch.title : ""))
                 + ",\"cmdSeq\":" + seq
                 + ",\"cmd\":" + jsonString(c)
                 + "}";
@@ -348,6 +431,31 @@ public class CastServer extends Thread {
             }
             out.flush();
         }
+    }
+
+    /** /live/TOKEN/index.m3u8 -> the channel; /live/TOKEN/p?u=URL -> anything it references. */
+    private void serveLive(OutputStream out, String path, String query, Map<String, String> headers,
+                           boolean head) throws IOException {
+        LiveProxy.Channel ch = live;
+        String[] seg = path.split("/");
+        if (ch == null || seg.length < 4 || !seg[2].equals(ch.token)) {
+            sendBytes(out, "404 Not Found", "text/plain", "no channel".getBytes(), head);
+            return;
+        }
+        String prefix = "/live/" + ch.token + "/p?u=";
+        String upstream;
+        if (seg[3].equals("index.m3u8")) {
+            upstream = ch.current().url;
+        } else if (seg[3].equals("p")) {
+            upstream = parseQuery(query).get("u");
+        } else {
+            upstream = null;
+        }
+        if (upstream == null || !(upstream.startsWith("http://") || upstream.startsWith("https://"))) {
+            sendBytes(out, "404 Not Found", "text/plain", "bad url".getBytes(), head);
+            return;
+        }
+        LiveProxy.serve(out, ch.current(), upstream, prefix, headers.get("range"), head);
     }
 
     private static int parseVideoId(String path) {
@@ -500,10 +608,12 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none;color
 <div id="msg">Connecting to your phone…</div>
 <div id="tap">Press OK on the remote to start the video</div>
 <div id="ttl"></div>
+<script src="/hls.js"></script>
 <script>
 var img=document.getElementById('img'),vid=document.getElementById('vid'),msg=document.getElementById('msg'),
     tap=document.getElementById('tap'),ttl=document.getElementById('ttl');
 var mode='',vidId=-1,lastSeq=-1,mjpegOk=false,polling=false,titleTimer=null,failures=0;
+var hls=null,liveId=-1,liveErr=false,liveTimer=null,recovered=false;
 function show(el,on){el.style.display=on?'block':'none';}
 function say(t){msg.innerHTML=t;show(msg,!!t);}
 
@@ -542,11 +652,41 @@ function stopVideo(){
   vid.pause();vid.removeAttribute('src');try{vid.load();}catch(e){}
   show(vid,false);show(tap,false);vidId=-1;
 }
-vid.onplaying=function(){show(tap,false);};
+vid.onplaying=function(){show(tap,false);if(mode==='live'&&!liveErr){say('');clearTimeout(liveTimer);}};
 vid.onerror=function(){
+  if(mode==='live'){liveFail();return;}
   if(mode==='video'&&vid.getAttribute('src'))
     say('The TV browser can’t play this video format.<br>On your phone, choose the TV’s own player instead,<br>or use an MP4 video.');
 };
+
+function stopLive(){
+  clearTimeout(liveTimer);
+  if(hls){try{hls.destroy();}catch(e){}hls=null;}
+  if(liveId>=0){vid.pause();vid.removeAttribute('src');try{vid.load();}catch(e){}show(vid,false);show(tap,false);liveId=-1;}
+}
+function liveFail(){
+  if(liveErr||liveId<0)return;
+  liveErr=true;clearTimeout(liveTimer);
+  say('Trying another source for this channel…');
+}
+function startLive(s){
+  stopMirror();stopVideo();stopLive();
+  liveId=s.liveId;liveErr=false;recovered=false;
+  show(vid,true);say('Loading '+s.title+'…');flashTitle(s.title);
+  if(window.Hls&&Hls.isSupported()){
+    hls=new Hls({liveSyncDurationCount:3,manifestLoadingMaxRetry:2,levelLoadingMaxRetry:3,fragLoadingMaxRetry:3});
+    hls.on(Hls.Events.MANIFEST_PARSED,function(){tryPlay();});
+    hls.on(Hls.Events.ERROR,function(ev,d){
+      if(!d.fatal)return;
+      if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;hls.recoverMediaError();}
+      else liveFail();
+    });
+    hls.loadSource(s.url);hls.attachMedia(vid);
+  }else{
+    vid.src=s.url;tryPlay();
+  }
+  liveTimer=setTimeout(function(){if(vid.paused||vid.readyState<3)liveFail();},25000);
+}
 function runCmd(c){
   if(c==='play')tryPlay();
   else if(c==='pause')vid.pause();
@@ -559,6 +699,7 @@ function goFull(){
 }
 document.addEventListener('keydown',function(e){
   goFull();
+  if(mode==='live'){if(vid.paused)tryPlay();return;}
   if(mode!=='video')return;
   var k=e.keyCode;
   if(k===13||k===415||k===10252){if(vid.paused)tryPlay();}
@@ -566,28 +707,36 @@ document.addEventListener('keydown',function(e){
   else if(k===37||k===412){vid.currentTime=Math.max(0,vid.currentTime-10);}
   else if(k===39||k===417){vid.currentTime=vid.currentTime+10;}
 });
-document.addEventListener('click',function(){goFull();if(mode==='video'&&vid.paused)tryPlay();});
+document.addEventListener('click',function(){goFull();if((mode==='video'||mode==='live')&&vid.paused)tryPlay();});
 
 function apply(s){
   if(lastSeq<0)lastSeq=s.cmdSeq;
   var prev=mode;mode=s.mode;
-  if(mode==='mirror'){
-    stopVideo();
+  if(mode==='live'){
+    if(prev==='mirror')stopMirror();
+    if(s.liveId!==liveId)startLive(s);
+    else if(s.failed){stopLive();liveId=s.liveId;
+      say('“'+s.title+'” isn’t available right now.<br>Choose another channel on your phone.');}
+  }else if(mode==='mirror'){
+    stopVideo();stopLive();
     if(prev!=='mirror')startMirror();else say('');
   }else if(mode==='video'){
     if(prev==='mirror')stopMirror();
+    stopLive();
     if(s.videoId!==vidId)startVideo(s);else if(msg.style.display!=='none'&&!vid.error)say('');
   }else{
     if(prev==='mirror')stopMirror();
-    stopVideo();
+    stopVideo();stopLive();
     say(mode==='external'?'Playing on the TV’s media player…'
       :'Ready.<br>On your phone, open TV Cast and choose a video<br>or start mirroring.');
   }
-  if(s.cmdSeq>lastSeq){lastSeq=s.cmdSeq;if(mode==='video')runCmd(s.cmd);}
+  if(s.cmdSeq>lastSeq){lastSeq=s.cmdSeq;if(mode==='video'||mode==='live')runCmd(s.cmd);}
 }
 function poll(){
   var q='';
-  if(mode==='video'&&vidId>=0){
+  if(mode==='live'&&liveId>=0){
+    q='?live='+liveId+'&err='+(liveErr?1:0)+'&playing='+(!vid.paused&&vid.readyState>=3?1:0)+'&paused='+(vid.paused?1:0);
+  }else if(mode==='video'&&vidId>=0){
     q='?pos='+(vid.currentTime||0).toFixed(1)+'&dur='+(isFinite(vid.duration)?vid.duration.toFixed(1):'-1')
       +'&paused='+(vid.paused?1:0);
   }
@@ -597,7 +746,7 @@ function poll(){
   x.onload=function(){failures=0;try{apply(JSON.parse(x.responseText));}catch(e){}setTimeout(poll,700);};
   x.onerror=x.ontimeout=function(){
     failures++;
-    if(failures>2&&mode!=='video'){if(mode==='mirror')stopMirror();mode='lost';
+    if(failures>2&&mode!=='video'&&mode!=='live'){if(mode==='mirror')stopMirror();mode='lost';
       say('Lost connection to the phone.<br>Make sure TV Cast is running and on the same Wi-Fi.');}
     setTimeout(poll,1500);
   };

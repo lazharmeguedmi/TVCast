@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
-    private TextView errorView, addressView;
+    private TextView errorView, addressView, liveNowView;
     // video
     private Button chooseVideoBtn;
     private LinearLayout videoPanel, targetsBox, controlsBox;
@@ -142,6 +142,14 @@ public class MainActivity extends Activity {
         String err = CastService.lastError;
         errorView.setText(err == null ? "" : err);
         errorView.setVisibility(err == null ? View.GONE : View.VISIBLE);
+
+        // --- live ---
+        if (svc != null && CastService.liveActive) {
+            liveNowView.setVisibility(View.VISIBLE);
+            liveNowView.setText("▶ " + CastService.liveTitle + " — " + CastService.liveStatus);
+        } else {
+            liveNowView.setVisibility(View.GONE);
+        }
 
         // --- video ---
         boolean video = svc != null && CastService.videoActive;
@@ -247,9 +255,27 @@ public class MainActivity extends Activity {
         errorView.setPadding(0, 0, 0, dp(12));
         col.addView(errorView);
 
+        // ---- Live TV card ----
+        LinearLayout lcard = card();
+        col.addView(lcard, cardParams());
+        lcard.addView(heading("📡  Live TV channels"));
+        TextView ldesc = text("Thousands of free channels from around the world, sorted by language "
+                + "and country. Tap one and it plays full-screen on the TV.", 14, C_MUTED);
+        ldesc.setPadding(0, dp(4), 0, dp(12));
+        lcard.addView(ldesc);
+        Button browse = button("Browse channels", C_BLUE);
+        browse.setOnClickListener(v -> startActivity(new Intent(this, ChannelsActivity.class)));
+        lcard.addView(browse, buttonParams(0));
+        liveNowView = text("", 14, C_GREEN);
+        liveNowView.setPadding(0, dp(10), 0, 0);
+        liveNowView.setVisibility(View.GONE);
+        lcard.addView(liveNowView);
+
         // ---- Video card ----
         LinearLayout vcard = card();
-        col.addView(vcard, cardParams());
+        LinearLayout.LayoutParams vp = cardParams();
+        vp.topMargin = dp(20);
+        col.addView(vcard, vp);
         vcard.addView(heading("🎬  Play a video on the TV"));
         TextView vdesc = text("Best for movies: full-screen on the TV with TV sound. Keep using your phone "
                 + "while it plays — this app is your remote.", 14, C_MUTED);

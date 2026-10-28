@@ -55,8 +55,16 @@ public class CastService extends Service {
     public static final String ACTION_VIDEO = "com.tvcast.app.VIDEO";
     public static final String ACTION_STOP_VIDEO = "com.tvcast.app.STOP_VIDEO";
     public static final String ACTION_STOP = "com.tvcast.app.STOP";
+    public static final String ACTION_LIVE = "com.tvcast.app.LIVE";
+    public static final String ACTION_STOP_LIVE = "com.tvcast.app.STOP_LIVE";
     public static final String EXTRA_CODE = "code";
     public static final String EXTRA_DATA = "data";
+    public static final String EXTRA_TITLE = "title";
+    public static final String EXTRA_URLS = "urls";
+    public static final String EXTRA_REFS = "refs";
+    public static final String EXTRA_UAS = "uas";
+    /** Location URL of the TV media player to use; absent = TV web browser. */
+    public static final String EXTRA_RENDERER = "renderer";
     public static final int PORT = 8080;
 
     // Mirror quality
@@ -82,6 +90,13 @@ public class CastService extends Service {
     static volatile String videoStatus = "";
     static volatile int positionSec = -1, durationSec = -1;
     static volatile boolean paused = true;
+    // live TV
+    static volatile boolean liveActive;
+    static volatile String liveTitle = "";
+    static volatile String liveStatus = "";
+    static volatile Dlna.Renderer liveTarget;
+    private long liveStartedAt;
+    private boolean liveWasPlaying;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private CastServer server;
@@ -117,6 +132,14 @@ public class CastService extends Service {
         super.onCreate();
         instance = this;
         server = new CastServer(PORT);
+        try (java.io.InputStream in = getAssets().open("hls.min.js")) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] b = new byte[32 * 1024];
+            int n;
+            while ((n = in.read(b)) > 0) bo.write(b, 0, n);
+            server.setHlsJs(bo.toByteArray());
+        } catch (IOException ignored) {
+        }
         server.start();
         worker = Executors.newSingleThreadScheduledExecutor();
         worker.scheduleWithFixedDelay(this::pollPlayback, 1, 1, TimeUnit.SECONDS);
@@ -140,8 +163,19 @@ public class CastService extends Service {
         if (action == null) action = ACTION_STOP;
 
         switch (action) {
+            case ACTION_LIVE: {
+                if (mirroring) stopCapture();
+                if (videoActive) stopVideoNow();
+                goForeground(false);
+                startLive(intent);
+                break;
+            }
+            case ACTION_STOP_LIVE:
+                stopLiveNow();
+                break;
             case ACTION_MIRROR: {
                 if (videoActive) stopVideoNow();
+                if (liveActive) stopLiveNow();
                 goForeground(true); // must happen before getMediaProjection()
                 int code = intent.getIntExtra(EXTRA_CODE, 0);
                 Intent data = Build.VERSION.SDK_INT >= 33
@@ -161,6 +195,7 @@ public class CastService extends Service {
             case ACTION_VIDEO: {
                 Uri uri = intent.getData();
                 if (mirroring) stopCapture();
+                if (liveActive) stopLiveNow();
                 goForeground(false);
                 if (videoActive) stopVideoNow();
                 try {
@@ -199,7 +234,7 @@ public class CastService extends Service {
     }
 
     private void stopIfIdle() {
-        if (!mirroring && !videoActive) {
+        if (!mirroring && !videoActive && !liveActive) {
             stopSelf();
         } else {
             NotificationManager nm = getSystemService(NotificationManager.class);
@@ -343,8 +378,124 @@ public class CastService extends Service {
         }
     }
 
+    // =====================================================================
+    // Live TV channels
+    // =====================================================================
+
+    private void startLive(Intent intent) {
+        String title = intent.getStringExtra(EXTRA_TITLE);
+        String[] urls = intent.getStringArrayExtra(EXTRA_URLS);
+        String[] refs = intent.getStringArrayExtra(EXTRA_REFS);
+        String[] uas = intent.getStringArrayExtra(EXTRA_UAS);
+        if (urls == null || urls.length == 0) return;
+        java.util.List<LiveProxy.Stream> streams = new java.util.ArrayList<>();
+        for (int i = 0; i < urls.length; i++) {
+            streams.add(new LiveProxy.Stream(urls[i],
+                    refs != null && i < refs.length ? refs[i] : "",
+                    uas != null && i < uas.length ? uas[i] : ""));
+        }
+        final Dlna.Renderer old = liveTarget;
+        Dlna.Renderer r = null;
+        String loc = intent.getStringExtra(EXTRA_RENDERER);
+        if (loc != null) {
+            for (Dlna.Renderer x : renderers) if (x.location.equals(loc)) r = x;
+        }
+        String token = Long.toHexString(Double.doubleToLongBits(Math.random()))
+                + Long.toHexString(System.nanoTime());
+        server.setLive(new LiveProxy.Channel(title == null ? "Live TV" : title, streams, token));
+        liveActive = true;
+        liveTitle = title == null ? "Live TV" : title;
+        liveTarget = r;
+        liveStartedAt = SystemClock.uptimeMillis();
+        liveWasPlaying = false;
+        lastError = null;
+
+        if (r == null) {
+            server.setMode(CastServer.MODE_LIVE);
+            liveStatus = "Loading on the TV…";
+            if (old != null) worker.execute(() -> quietStop(old));
+        } else {
+            server.setMode(CastServer.MODE_EXTERNAL);
+            liveStatus = "Sending to " + r.name + "…";
+            final Dlna.Renderer tv = r;
+            final String path = server.livePath();
+            final String t = liveTitle;
+            worker.execute(() -> {
+                if (old != null && old != tv) quietStop(old);
+                String base = serverUrl();
+                if (base == null) {
+                    liveStatus = "Not connected to Wi-Fi";
+                    return;
+                }
+                try {
+                    Dlna.load(tv, base + path, t, "application/vnd.apple.mpegurl", -1);
+                } catch (IOException e) {
+                    if (liveTarget == tv) {
+                        liveStatus = "The TV player didn't accept this channel. "
+                                + "Choose \"TV web browser\" under Play on, then try again.";
+                    }
+                }
+            });
+        }
+        updateNotification();
+    }
+
+    private void stopLiveNow() {
+        final Dlna.Renderer r = liveTarget;
+        if (r != null) worker.execute(() -> quietStop(r));
+        liveActive = false;
+        liveTarget = null;
+        liveStatus = "";
+        server.setLive(null);
+        if (CastServer.MODE_LIVE.equals(server.mode()) || CastServer.MODE_EXTERNAL.equals(server.mode())) {
+            server.setMode(CastServer.MODE_IDLE);
+        }
+    }
+
+    private void pollLive() {
+        LiveProxy.Channel ch = server.live();
+        if (ch == null) return;
+        Dlna.Renderer r = liveTarget;
+        if (r == null) {
+            if (server.liveErrorReported()) {
+                if (ch.next()) {
+                    server.reloadLive();
+                    liveStatus = "That source didn't work — trying another (" + (ch.index() + 1)
+                            + " of " + ch.streams.size() + ")…";
+                } else if (!liveStatus.startsWith("Not available")) {
+                    server.setLiveFailed(true);
+                    liveStatus = "Not available right now (it may be off-air or blocked in your country). "
+                            + "Try another channel.";
+                }
+            } else if (server.livePlaying()) {
+                liveStatus = "Playing on the TV ✓";
+            } else if (!server.tvConnected()) {
+                liveStatus = "Waiting for the TV — open " + serverUrl() + " in the TV's Internet browser";
+            }
+            return;
+        }
+        try {
+            String state = Dlna.transportState(r);
+            if (liveTarget != r) return;
+            if (state.equals("PLAYING")) {
+                liveWasPlaying = true;
+                liveStatus = "Playing on " + r.name + " ✓";
+            } else if ((state.equals("STOPPED") || state.equals("NO_MEDIA_PRESENT"))
+                    && (liveWasPlaying || SystemClock.uptimeMillis() - liveStartedAt > 20000)) {
+                liveStatus = liveWasPlaying ? "Stopped on the TV."
+                        : "The TV player couldn't open this channel. Under Play on, choose "
+                        + "\"TV web browser\" and try again.";
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
     /** Runs every second on the worker thread: reads the position from the TV. */
     private void pollPlayback() {
+        if (liveActive) {
+            pollLive();
+            return;
+        }
         if (!videoActive || !targetChosen) return;
         Dlna.Renderer r = target;
         if (r == null) {
@@ -558,7 +709,11 @@ public class CastService extends Service {
                 PendingIntent.FLAG_IMMUTABLE);
 
         String title, text;
-        if (videoActive) {
+        if (liveActive) {
+            title = "Live TV: " + liveTitle;
+            Dlna.Renderer r = liveTarget;
+            text = r != null ? r.name : "TV web browser";
+        } else if (videoActive) {
             title = "Playing on TV: " + videoTitle;
             Dlna.Renderer r = target;
             text = r != null ? r.name : (targetChosen ? "TV web browser" : "Tap to choose the TV");
@@ -612,6 +767,10 @@ public class CastService extends Service {
         instance = null;
         final Dlna.Renderer r = target;
         if (videoActive && r != null) worker.execute(() -> quietStop(r));
+        final Dlna.Renderer lr = liveTarget;
+        if (liveActive && lr != null) worker.execute(() -> quietStop(lr));
+        liveActive = false;
+        liveTarget = null;
         videoActive = false;
         target = null;
         targetChosen = false;

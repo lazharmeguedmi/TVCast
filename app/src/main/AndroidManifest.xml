@@ -29,6 +29,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ChannelsActivity"
+            android:exported="false"
+            android:label="Live TV"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
+
         <service
             android:name=".CastService"
             android:exported="false"
