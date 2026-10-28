@@ -61,7 +61,7 @@ public class HomeActivity extends Activity {
             {"docs", "🌍   Documentaries"},
             {"kids", "🧸   Cartoons"},
             {"search", "🔍   Search"},
-            {"phone", "📱   From my phone"},
+            {"phone", "📱   Phone / Mirror"},
     };
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -585,17 +585,18 @@ public class HomeActivity extends Activity {
         LinearLayout side = new LinearLayout(this);
         side.setOrientation(LinearLayout.VERTICAL);
         side.setBackgroundColor(Color.parseColor(C_SIDE));
-        side.setPadding(dp(16), dp(28), dp(16), dp(16));
-        TextView brand = text("Lazhar\nTV Cast", 26, C_TEXT);
+        side.setPadding(dp(14), dp(18), dp(14), dp(12));
+        TextView brand = text("Lazhar TV Cast", 20, C_TEXT);
         brand.setTypeface(Typeface.DEFAULT_BOLD);
-        brand.setPadding(dp(12), 0, 0, dp(24));
+        brand.setPadding(dp(10), 0, 0, dp(14));
         side.addView(brand);
         for (String[] n : NAV) {
-            TextView item = text(n[1], 18, C_TEXT);
+            TextView item = text(n[1], 16, C_TEXT);
             item.setTag(n[0]);
             item.setFocusable(true);
             item.setClickable(true);
-            item.setPadding(dp(14), dp(12), dp(14), dp(12));
+            item.setSingleLine(true);
+            item.setPadding(dp(12), dp(8), dp(12), dp(8));
             item.setBackground(navBackground());
             item.setOnClickListener(v -> select(n[0], true));
             item.setOnKeyListener((v, code, ev) -> {
@@ -608,11 +609,17 @@ public class HomeActivity extends Activity {
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.bottomMargin = dp(4);
+            lp.bottomMargin = dp(2);
             side.addView(item, lp);
             navViews.add(item);
         }
-        root.addView(side, new LinearLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.MATCH_PARENT));
+        // Scrollable, so every item stays reachable on any screen size
+        android.widget.ScrollView sideScroll = new android.widget.ScrollView(this);
+        sideScroll.setFillViewport(true);
+        sideScroll.setVerticalScrollBarEnabled(false);
+        sideScroll.setBackgroundColor(Color.parseColor(C_SIDE));
+        sideScroll.addView(side);
+        root.addView(sideScroll, new LinearLayout.LayoutParams(dp(230), ViewGroup.LayoutParams.MATCH_PARENT));
 
         // Content
         LinearLayout content = new LinearLayout(this);
