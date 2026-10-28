@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = 'TVCast'
-include ':app'
+include ':app', ':tv'

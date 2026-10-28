@@ -168,6 +168,16 @@ public class CastServer extends Thread {
         liveFailed = f;
     }
 
+    public String videoMime() {
+        VideoSource v = video;
+        return v == null ? "video/mp4" : v.mimeType();
+    }
+
+    public long videoLength() {
+        VideoSource v = video;
+        return v == null ? -1 : v.length();
+    }
+
     public void sendCommand(String c) {
         synchronized (cmdLock) {
             cmdSeq++;

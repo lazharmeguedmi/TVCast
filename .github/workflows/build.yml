@@ -36,17 +36,28 @@ jobs:
             exit 1
           fi
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk TVCast.apk
+      - name: Rename APKs
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk TVCast.apk
+          cp tv/build/outputs/apk/debug/tv-debug.apk tv.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TVCast-apk
-          path: TVCast.apk
+          name: TVCast-apks
+          path: |
+            TVCast.apk
+            tv.apk
 
       # Publishes the APK as a Release so you can download it straight from your phone.
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: TV Cast build ${{ github.run_number }}
-          files: TVCast.apk
+          make_latest: true
+          body: |
+            **Phone app:** TVCast.apk — install on your phone.
+            **TV app:** tv.apk — on the TV, open Downloader and enter
+            https://github.com/lazharmeguedmi/TVCast/releases/latest/download/tv.apk
+          files: |
+            TVCast.apk
+            tv.apk

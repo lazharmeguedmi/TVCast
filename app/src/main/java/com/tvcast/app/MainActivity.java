@@ -2,9 +2,12 @@ package com.tvcast.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -14,21 +17,26 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.OpenableColumns;
+import android.util.Size;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
-import java.util.List;
 import java.util.Locale;
 
-/** The app's single screen. Everything runs in CastService, so you can leave this screen anytime. */
+/** Main screen: choose a video → "Mirror to my TV". Also Live TV and full-screen mirroring. */
 public class MainActivity extends Activity {
+
+    static final String TV_APP_LINK = "https://github.com/lazharmeguedmi/TVCast/releases/latest/download/tv.apk";
 
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_VIDEO = 1002;
@@ -40,20 +48,23 @@ public class MainActivity extends Activity {
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
-    private TextView errorView, addressView, liveNowView;
-    // video
-    private Button chooseVideoBtn;
-    private LinearLayout videoPanel, targetsBox, controlsBox;
-    private TextView videoTitleView, videoStatusView, timeView, searchingView;
+    private static Uri pendingVideo;
+    private static String pendingName;
+    private boolean waitingToSend;
+
+    private TextView tvStatus, errorView;
+    private Button changeTvBtn;
+    // video picker
+    private LinearLayout pickedBox;
+    private ImageView thumb;
+    private TextView pickedName;
+    private Button chooseBtn;
+    // now playing
+    private LinearLayout nowCard, seekRow, controlsRow;
+    private TextView nowTitle, nowStatus, timeView;
     private SeekBar seekBar;
-    private Button playPauseBtn;
+    private Button playPauseBtn, backBtn, fwdBtn;
     private boolean dragging;
-    private List<Dlna.Renderer> shownRenderers;
-    private Object shownTarget = "";
-    private boolean shownTargetChosen, shownSearching;
-    // mirror
-    private TextView mirrorStatus;
-    private Button mirrorBtn;
 
     private final Runnable refresher = new Runnable() {
         @Override
@@ -72,19 +83,41 @@ public class MainActivity extends Activity {
                 != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
         }
+        handleShare(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleShare(intent);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        shownRenderers = null; // force rebuild
+        Target.discover(this, this::onTvsFound);
         ui.post(refresher);
+        showPicked();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         ui.removeCallbacks(refresher);
+    }
+
+    /** "Share → TV Cast" from Photos, Files, etc. */
+    private void handleShare(Intent intent) {
+        if (intent == null) return;
+        Uri uri = null;
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            uri = Build.VERSION.SDK_INT >= 33
+                    ? intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)
+                    : intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        } else if (Intent.ACTION_VIEW.equals(intent.getAction())) {
+            uri = intent.getData();
+        }
+        if (uri != null) setPicked(uri);
     }
 
     // ---------------- actions ----------------
@@ -96,71 +129,169 @@ public class MainActivity extends Activity {
         startActivityForResult(i, REQ_VIDEO);
     }
 
-    private void toggleMirror() {
-        if (CastService.isMirroring()) {
-            startService(new Intent(this, CastService.class).setAction(CastService.ACTION_STOP_MIRROR));
-        } else {
-            if (CastService.serverUrl() == null) {
-                CastService.lastError = "Connect your phone to the same Wi-Fi as the TV first.";
+    private void setPicked(Uri uri) {
+        pendingVideo = uri;
+        pendingName = displayName(uri);
+        showPicked();
+    }
+
+    private void showPicked() {
+        if (pickedBox == null) return;
+        boolean has = pendingVideo != null;
+        pickedBox.setVisibility(has ? View.VISIBLE : View.GONE);
+        chooseBtn.setText(has ? "Choose a different video" : "🎬  Choose a video");
+        style(chooseBtn, has ? C_GREY : C_BLUE);
+        if (!has) return;
+        pickedName.setText(pendingName);
+        thumb.setImageDrawable(null);
+        thumb.setVisibility(View.GONE);
+        final Uri u = pendingVideo;
+        if (Build.VERSION.SDK_INT >= 29) {
+            new Thread(() -> {
+                try {
+                    Bitmap b = getContentResolver().loadThumbnail(u, new Size(640, 360), null);
+                    ui.post(() -> {
+                        if (u.equals(pendingVideo)) {
+                            thumb.setImageBitmap(b);
+                            thumb.setVisibility(View.VISIBLE);
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+            }).start();
+        }
+    }
+
+    /** The big button. */
+    private void mirrorToTv() {
+        if (pendingVideo == null) {
+            chooseVideo();
+            return;
+        }
+        Target t = Target.current(this);
+        if (t == null) {
+            if (Target.searching || !Target.searchedOnce) {
+                waitingToSend = true;
+                Toast.makeText(this, "Looking for your TV…", Toast.LENGTH_SHORT).show();
                 return;
             }
-            MediaProjectionManager mpm =
-                    (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE);
+            showNoTvDialog();
+            return;
         }
+        startForegroundService(new Intent(this, CastService.class)
+                .setAction(CastService.ACTION_VIDEO)
+                .setData(pendingVideo)
+                .putExtra(CastService.EXTRA_TARGET, t.spec())
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        CastService.kind = CastService.KIND_VIDEO;
+        CastService.title = pendingName;
+        CastService.status = "Sending to " + t.label() + "…";
+        CastService.ok = false;
+        refresh();
+    }
+
+    private void onTvsFound() {
+        refresh();
+        if (waitingToSend && !Target.searching) {
+            waitingToSend = false;
+            mirrorToTv();
+        } else if (waitingToSend && Target.current(this) != null) {
+            waitingToSend = false;
+            mirrorToTv();
+        }
+    }
+
+    private void showNoTvDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("TV not found")
+                .setMessage("Open the TV Cast app on your TV (same Wi-Fi as this phone), then tap Search again.\n\n"
+                        + "Don't have it on the TV yet? Open Downloader on the TV and enter:\n" + TV_APP_LINK)
+                .setPositiveButton("Search again", (d, w) -> {
+                    waitingToSend = true;
+                    Target.discover(this, this::onTvsFound);
+                })
+                .setNeutralButton("Other ways", (d, w) -> Target.showPicker(this, this::refresh))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void mirrorScreen() {
+        Target t = Target.current(this);
+        if (t == null) {
+            showNoTvDialog();
+            return;
+        }
+        MediaProjectionManager mpm =
+                (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE);
+    }
+
+    private void stopAll() {
+        startService(new Intent(this, CastService.class).setAction(CastService.ACTION_STOP));
+        CastService.kind = "";
+        refresh();
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) return;
-        if (requestCode == REQ_CAPTURE) {
-            startForegroundService(new Intent(this, CastService.class)
-                    .setAction(CastService.ACTION_MIRROR)
-                    .putExtra(CastService.EXTRA_CODE, resultCode)
-                    .putExtra(CastService.EXTRA_DATA, data));
-        } else if (requestCode == REQ_VIDEO && data.getData() != null) {
+        if (requestCode == REQ_VIDEO && data.getData() != null) {
             Uri uri = data.getData();
             try {
                 getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
             } catch (SecurityException ignored) {
             }
+            setPicked(uri);
+        } else if (requestCode == REQ_CAPTURE) {
+            Target t = Target.current(this);
+            if (t == null) return;
             startForegroundService(new Intent(this, CastService.class)
-                    .setAction(CastService.ACTION_VIDEO)
-                    .setData(uri)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+                    .setAction(CastService.ACTION_MIRROR)
+                    .putExtra(CastService.EXTRA_CODE, resultCode)
+                    .putExtra(CastService.EXTRA_DATA, data)
+                    .putExtra(CastService.EXTRA_TARGET, t.spec()));
         }
     }
 
     // ---------------- refresh ----------------
 
     private void refresh() {
-        CastService svc = CastService.instance;
-        String url = CastService.serverUrl();
-        addressView.setText(url != null ? url : "Not on Wi-Fi");
+        Target t = Target.current(this);
+        if (t != null) {
+            tvStatus.setText("📺  " + t.label());
+            tvStatus.setTextColor(Color.parseColor(t.type == Target.APP ? C_GREEN : C_TEXT));
+        } else if (Target.searching || !Target.searchedOnce) {
+            tvStatus.setText("Looking for your TV…");
+            tvStatus.setTextColor(Color.parseColor(C_MUTED));
+        } else {
+            tvStatus.setText("TV not found — open TV Cast on your TV");
+            tvStatus.setTextColor(Color.parseColor("#F0883E"));
+        }
 
         String err = CastService.lastError;
         errorView.setText(err == null ? "" : err);
         errorView.setVisibility(err == null ? View.GONE : View.VISIBLE);
 
-        // --- live ---
-        if (svc != null && CastService.liveActive) {
-            liveNowView.setVisibility(View.VISIBLE);
-            liveNowView.setText("▶ " + CastService.liveTitle + " — " + CastService.liveStatus);
-        } else {
-            liveNowView.setVisibility(View.GONE);
-        }
+        boolean active = !CastService.kind.isEmpty() && (CastService.instance != null
+                || CastService.status.startsWith("Sending"));
+        nowCard.setVisibility(active ? View.VISIBLE : View.GONE);
+        if (!active) return;
 
-        // --- video ---
-        boolean video = svc != null && CastService.videoActive;
-        videoPanel.setVisibility(video ? View.VISIBLE : View.GONE);
-        chooseVideoBtn.setText(video ? "Choose a different video" : "Choose a video");
+        String k = CastService.kind;
+        String icon = CastService.KIND_LIVE.equals(k) ? "📡  " : CastService.KIND_MIRROR.equals(k) ? "📱  " : "🎬  ";
+        nowTitle.setText(icon + CastService.title);
+        nowStatus.setText(CastService.status);
+        nowStatus.setTextColor(Color.parseColor(CastService.ok ? C_GREEN : C_MUTED));
+
+        boolean video = CastService.KIND_VIDEO.equals(k);
+        boolean mirror = CastService.KIND_MIRROR.equals(k);
+        seekRow.setVisibility(video ? View.VISIBLE : View.GONE);
+        controlsRow.setVisibility(mirror ? View.GONE : View.VISIBLE);
+        backBtn.setVisibility(video ? View.VISIBLE : View.GONE);
+        fwdBtn.setVisibility(video ? View.VISIBLE : View.GONE);
+        playPauseBtn.setText(CastService.paused ? "▶  Play" : "❚❚  Pause");
         if (video) {
-            videoTitleView.setText(CastService.videoTitle);
-            videoStatusView.setText(CastService.videoStatus);
-            rebuildTargetsIfNeeded();
-            boolean chosen = CastService.targetChosen;
-            controlsBox.setVisibility(chosen ? View.VISIBLE : View.GONE);
             int pos = CastService.positionSec, dur = CastService.durationSec;
             if (dur > 0) {
                 seekBar.setEnabled(true);
@@ -171,64 +302,6 @@ public class MainActivity extends Activity {
                 seekBar.setProgress(0);
             }
             if (!dragging) timeView.setText(fmt(pos) + " / " + fmt(dur));
-            playPauseBtn.setText(CastService.paused ? "▶  Play" : "❚❚  Pause");
-        }
-
-        // --- mirror ---
-        boolean mirror = CastService.isMirroring();
-        if (mirror) {
-            mirrorStatus.setText("● Mirroring your screen — open the address above in the TV browser");
-            mirrorStatus.setTextColor(Color.parseColor(C_GREEN));
-            mirrorBtn.setText("Stop mirroring");
-            style(mirrorBtn, C_RED);
-        } else {
-            mirrorStatus.setText("Shows exactly what's on your phone. Turn the phone sideways for landscape. "
-                    + "Videos from streaming apps (Netflix etc.) show black — use those apps' own Cast button.");
-            mirrorStatus.setTextColor(Color.parseColor(C_MUTED));
-            mirrorBtn.setText("Start mirroring");
-            style(mirrorBtn, C_GREY);
-        }
-    }
-
-    private void rebuildTargetsIfNeeded() {
-        List<Dlna.Renderer> list = CastService.renderers;
-        Object tgt = CastService.target;
-        boolean chosen = CastService.targetChosen;
-        boolean searching = CastService.searching;
-        if (list == shownRenderers && tgt == shownTarget && chosen == shownTargetChosen
-                && searching == shownSearching) {
-            return;
-        }
-        shownRenderers = list;
-        shownTarget = tgt;
-        shownTargetChosen = chosen;
-        shownSearching = searching;
-
-        targetsBox.removeAllViews();
-        for (Dlna.Renderer r : list) {
-            boolean sel = chosen && tgt == r;
-            Button b = button("📺  " + r.name + (sel ? "  ✓" : ""), sel ? C_BLUE : C_GREY);
-            b.setOnClickListener(v -> {
-                CastService s = CastService.instance;
-                if (s != null) s.playOn(r);
-            });
-            targetsBox.addView(b, buttonParams(8));
-        }
-        boolean browserSel = chosen && tgt == null;
-        Button web = button("🌐  TV web browser" + (browserSel ? "  ✓" : ""), browserSel ? C_BLUE : C_GREY);
-        web.setOnClickListener(v -> {
-            CastService s = CastService.instance;
-            if (s != null) s.playOn(null);
-        });
-        targetsBox.addView(web, buttonParams(8));
-
-        if (searching) {
-            searchingView.setText("Looking for your TV on the Wi-Fi…");
-        } else if (list.isEmpty()) {
-            searchingView.setText("No TV found automatically. Make sure the TV is on, then tap Search again "
-                    + "— or use the TV web browser option.");
-        } else {
-            searchingView.setText("Tap your TV to play the video on it (recommended).");
         }
     }
 
@@ -238,91 +311,83 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(Color.parseColor(C_BG));
         scroll.setFitsSystemWindows(true);
-
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(20), dp(28), dp(20), dp(32));
+        col.setPadding(dp(20), dp(24), dp(20), dp(32));
         scroll.addView(col);
 
         TextView title = text("TV Cast", 30, C_TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         col.addView(title);
-        TextView sub = text("Send videos or your screen to your Samsung TV", 15, C_MUTED);
-        sub.setPadding(0, dp(2), 0, dp(16));
-        col.addView(sub);
+
+        // TV status row
+        LinearLayout tvRow = new LinearLayout(this);
+        tvRow.setOrientation(LinearLayout.HORIZONTAL);
+        tvRow.setGravity(Gravity.CENTER_VERTICAL);
+        tvRow.setPadding(dp(14), dp(6), dp(6), dp(6));
+        tvRow.setBackground(rounded(C_CARD, 12, C_LINE));
+        tvStatus = text("Looking for your TV…", 15, C_MUTED);
+        tvRow.addView(tvStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        changeTvBtn = linkButton("Change");
+        changeTvBtn.setOnClickListener(v -> Target.showPicker(this, this::refresh));
+        tvRow.addView(changeTvBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        LinearLayout.LayoutParams trp = full();
+        trp.topMargin = dp(14);
+        col.addView(tvRow, trp);
 
         errorView = text("", 14, "#F85149");
-        errorView.setPadding(0, 0, 0, dp(12));
+        errorView.setPadding(0, dp(10), 0, 0);
+        errorView.setVisibility(View.GONE);
         col.addView(errorView);
 
-        // ---- Live TV card ----
-        LinearLayout lcard = card();
-        col.addView(lcard, cardParams());
-        lcard.addView(heading("📡  Live TV channels"));
-        TextView ldesc = text("Thousands of free channels from around the world, sorted by language "
-                + "and country. Tap one and it plays full-screen on the TV.", 14, C_MUTED);
-        ldesc.setPadding(0, dp(4), 0, dp(12));
-        lcard.addView(ldesc);
-        Button browse = button("Browse channels", C_BLUE);
-        browse.setOnClickListener(v -> startActivity(new Intent(this, ChannelsActivity.class)));
-        lcard.addView(browse, buttonParams(0));
-        liveNowView = text("", 14, C_GREEN);
-        liveNowView.setPadding(0, dp(10), 0, 0);
-        liveNowView.setVisibility(View.GONE);
-        lcard.addView(liveNowView);
-
-        // ---- Video card ----
+        // Video card
         LinearLayout vcard = card();
-        LinearLayout.LayoutParams vp = cardParams();
-        vp.topMargin = dp(20);
-        col.addView(vcard, vp);
-        vcard.addView(heading("🎬  Play a video on the TV"));
-        TextView vdesc = text("Best for movies: full-screen on the TV with TV sound. Keep using your phone "
-                + "while it plays — this app is your remote.", 14, C_MUTED);
-        vdesc.setPadding(0, dp(4), 0, dp(12));
-        vcard.addView(vdesc);
-        chooseVideoBtn = button("Choose a video", C_BLUE);
-        chooseVideoBtn.setOnClickListener(v -> chooseVideo());
-        vcard.addView(chooseVideoBtn, buttonParams(0));
+        LinearLayout.LayoutParams vcp = full();
+        vcp.topMargin = dp(18);
+        col.addView(vcard, vcp);
 
-        videoPanel = new LinearLayout(this);
-        videoPanel.setOrientation(LinearLayout.VERTICAL);
-        videoPanel.setVisibility(View.GONE);
-        vcard.addView(videoPanel);
+        pickedBox = new LinearLayout(this);
+        pickedBox.setOrientation(LinearLayout.VERTICAL);
+        thumb = new ImageView(this);
+        thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumb.setBackground(rounded("#000000", 12, null));
+        thumb.setClipToOutline(true);
+        pickedBox.addView(thumb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(180)));
+        pickedName = text("", 17, C_TEXT);
+        pickedName.setTypeface(Typeface.DEFAULT_BOLD);
+        pickedName.setPadding(0, dp(12), 0, dp(12));
+        pickedBox.addView(pickedName);
+        Button mirrorBtn = button("📺   Mirror to my TV", C_BLUE);
+        mirrorBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
+        mirrorBtn.setOnClickListener(v -> mirrorToTv());
+        pickedBox.addView(mirrorBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
+        pickedBox.setVisibility(View.GONE);
+        vcard.addView(pickedBox);
 
-        videoTitleView = text("", 17, C_TEXT);
-        videoTitleView.setTypeface(Typeface.DEFAULT_BOLD);
-        videoTitleView.setPadding(0, dp(16), 0, dp(4));
-        videoPanel.addView(videoTitleView);
+        chooseBtn = button("🎬  Choose a video", C_BLUE);
+        chooseBtn.setOnClickListener(v -> chooseVideo());
+        LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+        cbp.topMargin = dp(10);
+        vcard.addView(chooseBtn, cbp);
 
-        TextView playOn = text("Play on:", 14, C_MUTED);
-        playOn.setPadding(0, dp(6), 0, 0);
-        videoPanel.addView(playOn);
-        targetsBox = new LinearLayout(this);
-        targetsBox.setOrientation(LinearLayout.VERTICAL);
-        videoPanel.addView(targetsBox);
-        searchingView = text("", 13, C_MUTED);
-        searchingView.setPadding(0, dp(8), 0, 0);
-        videoPanel.addView(searchingView);
-        Button searchAgain = smallButton("Search again");
-        searchAgain.setOnClickListener(v -> {
-            CastService s = CastService.instance;
-            if (s != null) s.discover();
-        });
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
-        sp.topMargin = dp(6);
-        videoPanel.addView(searchAgain, sp);
+        // Now playing card
+        nowCard = card();
+        LinearLayout.LayoutParams ncp = full();
+        ncp.topMargin = dp(18);
+        col.addView(nowCard, ncp);
+        TextView onTv = text("NOW ON TV", 12, C_MUTED);
+        onTv.setTypeface(Typeface.DEFAULT_BOLD);
+        nowCard.addView(onTv);
+        nowTitle = text("", 17, C_TEXT);
+        nowTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        nowTitle.setPadding(0, dp(6), 0, dp(2));
+        nowCard.addView(nowTitle);
+        nowStatus = text("", 14, C_MUTED);
+        nowCard.addView(nowStatus);
 
-        controlsBox = new LinearLayout(this);
-        controlsBox.setOrientation(LinearLayout.VERTICAL);
-        controlsBox.setVisibility(View.GONE);
-        videoPanel.addView(controlsBox);
-
-        videoStatusView = text("", 14, C_GREEN);
-        videoStatusView.setPadding(0, dp(14), 0, dp(4));
-        controlsBox.addView(videoStatusView);
-
+        seekRow = new LinearLayout(this);
+        seekRow.setOrientation(LinearLayout.VERTICAL);
+        seekRow.setPadding(0, dp(10), 0, 0);
         seekBar = new SeekBar(this);
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -342,21 +407,22 @@ public class MainActivity extends Activity {
                 if (svc != null) svc.seekTo(s.getProgress());
             }
         });
-        controlsBox.addView(seekBar);
+        seekRow.addView(seekBar);
         timeView = text("", 13, C_MUTED);
         timeView.setGravity(Gravity.END);
-        controlsBox.addView(timeView);
+        seekRow.addView(timeView);
+        nowCard.addView(seekRow);
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        Button back = button("⟲ 10s", C_GREY);
+        controlsRow = new LinearLayout(this);
+        controlsRow.setOrientation(LinearLayout.HORIZONTAL);
+        backBtn = button("⟲ 10s", C_GREY);
         playPauseBtn = button("❚❚  Pause", C_BLUE);
-        Button fwd = button("10s ⟳", C_GREY);
-        back.setOnClickListener(v -> {
+        fwdBtn = button("10s ⟳", C_GREY);
+        backBtn.setOnClickListener(v -> {
             CastService s = CastService.instance;
             if (s != null) s.seekBy(-10);
         });
-        fwd.setOnClickListener(v -> {
+        fwdBtn.setOnClickListener(v -> {
             CastService s = CastService.instance;
             if (s != null) s.seekBy(10);
         });
@@ -364,60 +430,56 @@ public class MainActivity extends Activity {
             CastService s = CastService.instance;
             if (s != null) s.togglePause();
         });
-        row.addView(back, weight(1));
-        row.addView(playPauseBtn, weight(1.4f));
-        row.addView(fwd, weight(1));
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
-        rp.topMargin = dp(8);
-        controlsBox.addView(row, rp);
+        controlsRow.addView(backBtn, weight(1));
+        controlsRow.addView(playPauseBtn, weight(1.4f));
+        controlsRow.addView(fwdBtn, weight(1));
+        LinearLayout.LayoutParams crp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
+        crp.topMargin = dp(10);
+        nowCard.addView(controlsRow, crp);
 
-        Button stopVideo = button("Stop video", C_RED);
-        stopVideo.setOnClickListener(v ->
-                startService(new Intent(this, CastService.class).setAction(CastService.ACTION_STOP_VIDEO)));
-        controlsBox.addView(stopVideo, buttonParams(10));
+        Button stop = button("Stop", C_RED);
+        stop.setOnClickListener(v -> stopAll());
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        sp.topMargin = dp(10);
+        nowCard.addView(stop, sp);
+        nowCard.setVisibility(View.GONE);
 
-        // ---- Address ----
-        TextView addrLabel = text("TV browser address (for the web browser option and mirroring):", 13, C_MUTED);
-        addrLabel.setPadding(dp(4), dp(20), dp(4), dp(6));
-        col.addView(addrLabel);
-        addressView = text("", 22, C_TEXT);
-        addressView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        addressView.setTextIsSelectable(true);
-        addressView.setGravity(Gravity.CENTER);
-        addressView.setPadding(dp(12), dp(12), dp(12), dp(12));
-        addressView.setBackground(rounded(C_CARD, 12, C_LINE));
-        col.addView(addressView);
+        // More
+        LinearLayout more = new LinearLayout(this);
+        more.setOrientation(LinearLayout.HORIZONTAL);
+        Button live = button("📡  Live TV", C_GREY);
+        live.setOnClickListener(v -> startActivity(new Intent(this, ChannelsActivity.class)));
+        Button screen = button("📱  Mirror my screen", C_GREY);
+        screen.setOnClickListener(v -> mirrorScreen());
+        more.addView(live, weight(1));
+        more.addView(screen, weight(1));
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+        mp.topMargin = dp(18);
+        col.addView(more, mp);
 
-        // ---- Mirror card ----
-        LinearLayout mcard = card();
-        LinearLayout.LayoutParams mp = cardParams();
-        mp.topMargin = dp(20);
-        col.addView(mcard, mp);
-        mcard.addView(heading("📱  Mirror your screen"));
-        mirrorStatus = text("", 14, C_MUTED);
-        mirrorStatus.setPadding(0, dp(4), 0, dp(12));
-        mcard.addView(mirrorStatus);
-        mirrorBtn = button("Start mirroring", C_GREY);
-        mirrorBtn.setOnClickListener(v -> toggleMirror());
-        mcard.addView(mirrorBtn, buttonParams(0));
-
-        // ---- Help ----
-        TextView help = text("Tips\n"
-                + "• Phone and TV must be on the same Wi-Fi.\n"
-                + "• The first time, the TV may ask to allow this phone — choose Allow.\n"
-                + "• Works with videos saved on your phone (MP4 works everywhere; the TV player also "
-                + "handles MKV and more).\n"
-                + "• Web browser option: on the TV press Home → Internet, type the address above, "
-                + "and bookmark it.", 13, C_MUTED);
-        help.setLineSpacing(0, 1.25f);
-        help.setPadding(dp(4), dp(20), dp(4), 0);
+        TextView help = text("Get TV Cast on your TV: open Downloader on the TV and enter\n" + TV_APP_LINK,
+                12, C_MUTED);
+        help.setTextIsSelectable(true);
+        help.setPadding(dp(4), dp(24), dp(4), 0);
         col.addView(help);
 
         return scroll;
     }
 
-    // ---------------- small UI helpers ----------------
+    // ---------------- helpers ----------------
+
+    private String displayName(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME},
+                null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) {
+                String n = c.getString(0);
+                int dot = n.lastIndexOf('.');
+                return dot > 0 ? n.substring(0, dot) : n;
+            }
+        } catch (Exception ignored) {
+        }
+        return "Video";
+    }
 
     private LinearLayout card() {
         LinearLayout c = new LinearLayout(this);
@@ -427,15 +489,8 @@ public class MainActivity extends Activity {
         return c;
     }
 
-    private LinearLayout.LayoutParams cardParams() {
-        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-    }
-
-    private TextView heading(String s) {
-        TextView t = text(s, 19, C_TEXT);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        return t;
+    private LinearLayout.LayoutParams full() {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
     private TextView text(String s, int sp, String color) {
@@ -457,7 +512,7 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    private Button smallButton(String label) {
+    private Button linkButton(String label) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
@@ -465,7 +520,6 @@ public class MainActivity extends Activity {
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         b.setBackgroundColor(Color.TRANSPARENT);
         b.setStateListAnimator(null);
-        b.setPadding(0, 0, 0, 0);
         return b;
     }
 
@@ -479,13 +533,6 @@ public class MainActivity extends Activity {
         g.setCornerRadius(dp(radiusDp));
         if (stroke != null) g.setStroke(dp(1), Color.parseColor(stroke));
         return g;
-    }
-
-    private LinearLayout.LayoutParams buttonParams(int topMarginDp) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
-        lp.topMargin = dp(topMarginDp);
-        return lp;
     }
 
     private LinearLayout.LayoutParams weight(float w) {

@@ -41,7 +41,6 @@ public class ChannelsActivity extends Activity {
     private static final String C_BG = "#0D1117", C_CARD = "#161B22", C_LINE = "#30363D",
             C_TEXT = "#E6EDF3", C_MUTED = "#8B949E", C_BLUE = "#1F6FEB", C_RED = "#DA3633",
             C_GREEN = "#3FB950";
-    private static final String PREFS = "tvcast", PREF_TARGET = "live_target";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -133,19 +132,7 @@ public class ChannelsActivity extends Activity {
     }
 
     private void discoverTvs() {
-        new Thread(() -> {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            WifiManager.MulticastLock lock = wm != null ? wm.createMulticastLock("TVCast-ssdp-live") : null;
-            try {
-                if (lock != null) lock.acquire();
-                List<Dlna.Renderer> found = Dlna.discover(3500);
-                if (!found.isEmpty() || CastService.renderers.isEmpty()) CastService.renderers = found;
-            } catch (Exception ignored) {
-            } finally {
-                if (lock != null && lock.isHeld()) lock.release();
-            }
-            ui.post(this::updateTargetButton);
-        }).start();
+        Target.discover(this, this::updateTargetButton);
     }
 
     // ---------------- navigation ----------------
@@ -221,72 +208,58 @@ public class ChannelsActivity extends Activity {
     }
 
     private void play(Catalog.Channel ch) {
+        Target t = Target.current(this);
+        if (t == null) {
+            new AlertDialog.Builder(this)
+                    .setTitle("TV not found")
+                    .setMessage("Open the TV Cast app on your TV (same Wi-Fi as this phone), then try again.\n\n"
+                            + "Don't have it on the TV yet? Open Downloader on the TV and enter:\n"
+                            + MainActivity.TV_APP_LINK)
+                    .setPositiveButton("Search again", (d, w) -> discoverTvs())
+                    .setNeutralButton("Other ways", (d, w) -> Target.showPicker(this, this::updateTargetButton))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
         Intent i = new Intent(this, CastService.class)
                 .setAction(CastService.ACTION_LIVE)
                 .putExtra(CastService.EXTRA_TITLE, ch.name)
                 .putExtra(CastService.EXTRA_URLS, ch.urls)
                 .putExtra(CastService.EXTRA_REFS, ch.refs)
-                .putExtra(CastService.EXTRA_UAS, ch.uas);
-        Dlna.Renderer r = savedRenderer();
-        if (r != null) i.putExtra(CastService.EXTRA_RENDERER, r.location);
-        CastService.liveTitle = ch.name;
-        CastService.liveStatus = "Starting…";
+                .putExtra(CastService.EXTRA_UAS, ch.uas)
+                .putExtra(CastService.EXTRA_TARGET, t.spec());
+        CastService.kind = CastService.KIND_LIVE;
+        CastService.title = ch.name;
+        CastService.status = "Sending to " + t.label() + "…";
+        CastService.ok = false;
         startForegroundService(i);
         refreshNowPlaying();
     }
 
     // ---------------- where to play ----------------
 
-    private Dlna.Renderer savedRenderer() {
-        String loc = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TARGET, "");
-        if (loc.isEmpty()) return null;
-        for (Dlna.Renderer r : CastService.renderers) if (r.location.equals(loc)) return r;
-        return null;
-    }
-
     private void updateTargetButton() {
-        Dlna.Renderer r = savedRenderer();
-        targetBtn.setText("Play on:  " + (r == null ? "🌐 TV web browser" : "📺 " + r.name) + "  ▾");
+        Target t = Target.current(this);
+        String label = t != null ? t.label()
+                : (Target.searching || !Target.searchedOnce ? "looking for your TV…" : "TV not found");
+        targetBtn.setText("Play on:  📺 " + label + "  ▾");
     }
 
     private void chooseTarget() {
-        final List<Dlna.Renderer> tvs = new ArrayList<>(CastService.renderers);
-        String[] labels = new String[tvs.size() + 2];
-        labels[0] = "🌐  TV web browser (recommended for live TV)";
-        for (int i = 0; i < tvs.size(); i++) labels[i + 1] = "📺  " + tvs.get(i).name + " (TV media player)";
-        labels[labels.length - 1] = "🔄  Search for TVs again";
-        new AlertDialog.Builder(this)
-                .setTitle("Where should channels play?")
-                .setItems(labels, (d, which) -> {
-                    SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
-                    if (which == 0) {
-                        e.putString(PREF_TARGET, "").apply();
-                    } else if (which == labels.length - 1) {
-                        discoverTvs();
-                        return;
-                    } else {
-                        e.putString(PREF_TARGET, tvs.get(which - 1).location).apply();
-                    }
-                    updateTargetButton();
-                })
-                .show();
+        Target.showPicker(this, this::updateTargetButton);
     }
 
     private void refreshNowPlaying() {
-        if (CastService.liveActive || (CastService.instance == null && "Starting…".equals(CastService.liveStatus))) {
+        if (CastService.KIND_LIVE.equals(CastService.kind)) {
             nowBar.setVisibility(View.VISIBLE);
-            nowTitle.setText("▶  " + CastService.liveTitle);
-            String s = CastService.liveStatus;
-            nowStatus.setText(s);
-            nowStatus.setTextColor(Color.parseColor(s.contains("✓") ? C_GREEN
-                    : s.startsWith("Not available") || s.contains("couldn't") ? "#F85149" : C_MUTED));
+            nowTitle.setText("▶  " + CastService.title);
+            nowStatus.setText(CastService.status);
+            nowStatus.setTextColor(Color.parseColor(CastService.ok ? C_GREEN
+                    : CastService.status.startsWith("Not available") ? "#F85149" : C_MUTED));
         } else {
             nowBar.setVisibility(View.GONE);
         }
-        String url = CastService.serverUrl();
-        if (savedRenderer() == null && url != null) {
-            targetBtn.setContentDescription("TV browser address " + url);
-        }
+        updateTargetButton();
     }
 
     // ---------------- layout ----------------
@@ -411,8 +384,8 @@ public class ChannelsActivity extends Activity {
         stop.setTextColor(Color.WHITE);
         stop.setBackground(rounded(C_RED, 10, null));
         stop.setOnClickListener(v -> {
-            startService(new Intent(this, CastService.class).setAction(CastService.ACTION_STOP_LIVE));
-            CastService.liveStatus = "";
+            startService(new Intent(this, CastService.class).setAction(CastService.ACTION_STOP));
+            CastService.kind = "";
             nowBar.setVisibility(View.GONE);
         });
         LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(dp(76), dp(44));

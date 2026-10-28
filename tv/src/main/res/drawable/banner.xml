@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 320x180 home-screen banner for Android TV / Google TV -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="#0D1117" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#1F6FEB" android:pathData="M0,0h320v6h-320z" />
+    <!-- TV -->
+    <path android:fillColor="#FFFFFF" android:pathData="M40,52h84a6,6 0,0 1,6 6v50a6,6 0,0 1,-6 6h-84a6,6 0,0 1,-6 -6v-50a6,6 0,0 1,6 -6z" />
+    <path android:fillColor="#1F6FEB" android:pathData="M42,60h80v44h-80z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M64,120h36v6h-36z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:fillColor="#00000000" android:pathData="M52,86a12,12 0,0 1,12 12" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:fillColor="#00000000" android:pathData="M52,76a22,22 0,0 1,22 22" />
+    <path android:fillColor="#FFFFFF" android:pathData="M52,94a4,4 0,0 1,4 4h-4z" />
+    <!-- "TV" letters -->
+    <path android:fillColor="#FFFFFF" android:pathData="M156,62h40v9h-15v45h-10v-45h-15z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M200,62h10.5l12.5,40l12.5,-40h10.5l-18,54h-10z" />
+    <!-- "CAST" bar -->
+    <path android:fillColor="#58A6FF" android:pathData="M156,124h90v6h-90z" />
+</vector>
