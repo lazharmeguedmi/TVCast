@@ -27,7 +27,15 @@ jobs:
           gradle-version: '8.10.2'
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          if ! gradle assembleDebug --no-daemon 2>&1 | tee build.log; then
+            # Surface compiler errors as annotations so they're visible without the full log
+            grep -E "error:|\.java:[0-9]+|What went wrong|AAPT|Execution failed|> " build.log | head -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk TVCast.apk
