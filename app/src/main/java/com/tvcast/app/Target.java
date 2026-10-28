@@ -203,6 +203,7 @@ final class Target {
                 .setPositiveButton("Connect", (d, w) -> {
                     final String host = input.getText().toString().trim();
                     final Context app = a.getApplicationContext();
+                    prefs(app).edit().putString("typed_host", host).apply();
                     new Thread(() -> {
                         TvApps.Tv tv = TvApps.probe(host, TvApps.HTTP_PORT);
                         new Handler(Looper.getMainLooper()).post(() -> {
@@ -228,6 +229,119 @@ final class Target {
                 .show();
     }
 
+    // =====================================================================
+    // Connection test: tells apart "different network" from "TV app not running"
+    // =====================================================================
+
+    static void testConnection(Activity a) {
+        final android.widget.EditText input = new android.widget.EditText(a);
+        input.setInputType(android.text.InputType.TYPE_CLASS_PHONE);
+        Target last = fromSpec(prefs(a).getString(PREF_LAST_TV, null));
+        String host = last != null && last.type == APP ? last.tv.host : prefs(a).getString("typed_host", "");
+        input.setText(host);
+        input.setHint("TV address, e.g. 192.168.1.154");
+        int pad = Math.round(20 * a.getResources().getDisplayMetrics().density);
+        android.widget.FrameLayout box = new android.widget.FrameLayout(a);
+        box.setPadding(pad, pad / 2, pad, 0);
+        box.addView(input);
+        new AlertDialog.Builder(a)
+                .setTitle("Test connection")
+                .setMessage("Enter the TV's address (shown on the TV app's 📱 Phone / Mirror page).")
+                .setView(box)
+                .setPositiveButton("Run test", (d, w) -> {
+                    String h = input.getText().toString().trim();
+                    prefs(a).edit().putString("typed_host", h).apply();
+                    android.app.ProgressDialog pd = android.app.ProgressDialog.show(a, null, "Testing…", true);
+                    new Thread(() -> {
+                        String report = runTest(a.getApplicationContext(), h);
+                        new Handler(Looper.getMainLooper()).post(() -> {
+                            pd.dismiss();
+                            if (a.isFinishing()) return;
+                            new AlertDialog.Builder(a).setTitle("Connection test").setMessage(report)
+                                    .setPositiveButton("OK", null).show();
+                        });
+                    }).start();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private static String tcp(String host, int port) {
+        try (java.net.Socket s = new java.net.Socket(java.net.Proxy.NO_PROXY)) {
+            s.connect(new java.net.InetSocketAddress(host, port), 2500);
+            return "open";
+        } catch (java.net.ConnectException e) {
+            String m = String.valueOf(e.getMessage()).toLowerCase(java.util.Locale.ROOT);
+            if (m.contains("refused")) return "refused";
+            if (m.contains("unreachable") || m.contains("no route")) return "unreachable";
+            return "failed";
+        } catch (java.net.SocketTimeoutException e) {
+            return "timeout";
+        } catch (Exception e) {
+            return "error";
+        }
+    }
+
+    static String runTest(Context ctx, String host) {
+        StringBuilder r = new StringBuilder();
+        String phoneUrl = CastService.serverUrl();
+        String phoneIp = phoneUrl == null ? null : phoneUrl.replace("http://", "").replace(":" + CastService.PORT, "");
+        r.append("This phone: ").append(phoneIp == null ? "NOT on Wi-Fi" : phoneIp).append('\n');
+        r.append("TV: ").append(host).append("\n\n");
+        if (phoneIp == null) {
+            return r.append("➜ Turn on Wi-Fi on the phone and join the same network as the TV.").toString();
+        }
+        String[] a = phoneIp.split("\\."), b = host.split("\\.");
+        boolean sameNet = a.length == 4 && b.length == 4 && a[0].equals(b[0]) && a[1].equals(b[1]) && a[2].equals(b[2]);
+        r.append("Same network range: ").append(sameNet ? "yes" : "NO").append('\n');
+        String app = tcp(host, TvApps.HTTP_PORT);
+        r.append("TV app receiver (port 8090): ").append(app).append('\n');
+        boolean tvSeen = !app.equals("timeout") && !app.equals("unreachable") && !app.equals("error");
+        if (!app.equals("open")) {
+            for (int port : new int[]{8009, 8008, 5555, 80}) {
+                String res = tcp(host, port);
+                r.append("TV other port ").append(port).append(": ").append(res).append('\n');
+                if (res.equals("open") || res.equals("refused")) tvSeen = true;
+            }
+        }
+        r.append('\n');
+        if (app.equals("open")) {
+            TvApps.Tv tv = TvApps.probe(host, TvApps.HTTP_PORT);
+            if (tv == null) {
+                r.append("➜ Something answers on port 8090 but it isn't Lazhar TV Cast.");
+            } else {
+                try {
+                    String reply = TvApps.hello(tv, Connection.phoneName(ctx), CastService.PORT, true);
+                    boolean reverse = "true".equals(TvApps.jsonField(reply, "reverse"));
+                    r.append("Phone → TV: OK (").append(tv.name).append(")\n");
+                    r.append("TV → phone: ").append(reverse ? "OK" : "BLOCKED").append("\n\n");
+                    r.append(reverse ? "➜ Everything works. Tap Connect."
+                            : "➜ The TV can't reach the phone. Turn off any VPN on the phone and check the router "
+                            + "doesn't isolate devices.");
+                    List<TvApps.Tv> l = new ArrayList<>(tvs);
+                    l.removeIf(x -> x.host.equals(tv.host));
+                    l.add(0, tv);
+                    tvs = l;
+                    prefs(ctx).edit().putString(PREF_LAST_TV, app(tv).spec()).apply();
+                } catch (Exception e) {
+                    r.append("➜ Reached the TV app, but it didn't reply (").append(e.getClass().getSimpleName()).append(").");
+                }
+            }
+        } else if (tvSeen) {
+            r.append("➜ The TV is reachable, but the Lazhar TV Cast receiver isn't running.\n"
+                    + "Open Lazhar TV Cast on the TV, go to 📱 Phone / Mirror and check the \"Receiver\" line.");
+        } else if (!sameNet) {
+            r.append("➜ The phone and TV are on DIFFERENT networks. Connect both to the same Wi-Fi name "
+                    + "(not a guest network). Check the TV under Settings → Network.");
+        } else {
+            r.append("➜ The phone can't reach the TV at all. Check the TV address, and that both use the same "
+                    + "Wi-Fi name. Some routers have \"AP isolation\" / \"client isolation\" or a separate "
+                    + "2.4 GHz / 5 GHz / mesh \"IoT\" network that blocks devices from seeing each other — "
+                    + "turn that off or put both on the same network.");
+        }
+        return r.toString();
+    }
+
     /** "Play on" picker shared by all screens. */
     static void showPicker(Activity a, Runnable changed) {
         final List<Target> options = new ArrayList<>();
@@ -246,6 +360,8 @@ final class Target {
         options.add(null);
         labels.add("🔄  Search again");
         options.add(null);
+        labels.add("🩺  Test connection");
+        options.add(null);
         labels.add("⌨  Enter the TV's address (shown in the TV app)");
 
         new AlertDialog.Builder(a)
@@ -254,6 +370,10 @@ final class Target {
                     Target t = options.get(which);
                     if (t == null && which == labels.size() - 1) {
                         enterAddress(a, changed);
+                        return;
+                    }
+                    if (t == null && which == labels.size() - 2) {
+                        testConnection(a);
                         return;
                     }
                     if (t == null) {

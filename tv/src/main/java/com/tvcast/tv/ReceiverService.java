@@ -49,6 +49,24 @@ public class ReceiverService extends Service implements CommandServer.Handler {
     private static final String CHANNEL = "tvcast-tv";
     private final Handler main = new Handler(Looper.getMainLooper());
     private CommandServer server;
+    static volatile CommandServer serverRef;
+    static volatile String selfTest = "checking…";
+
+    /** Can this TV reach its own receiver through the Wi-Fi address? (tells if it's running) */
+    static void runSelfTest(String ip) {
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                        new java.net.URL("http://" + ip + ":" + CommandServer.HTTP_PORT + "/info").openConnection();
+                c.setConnectTimeout(3000);
+                c.setReadTimeout(3000);
+                selfTest = c.getResponseCode() == 200 ? "OK" : "HTTP " + c.getResponseCode();
+                c.disconnect();
+            } catch (Exception e) {
+                selfTest = "FAILED (" + e.getClass().getSimpleName() + ")";
+            }
+        }).start();
+    }
     private WifiManager.MulticastLock multicastLock;
     private WifiManager.WifiLock wifiLock;
 
@@ -101,6 +119,7 @@ public class ReceiverService extends Service implements CommandServer.Handler {
         }
         server = new CommandServer(deviceName(this), this);
         server.start();
+        serverRef = server;
     }
 
     @Override

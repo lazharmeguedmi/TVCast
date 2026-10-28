@@ -72,17 +72,33 @@ public class CommandServer {
         pool.shutdownNow();
     }
 
+    // Diagnostics shown on the TV's Phone page
+    public volatile boolean listening;
+    public volatile String lastError = "";
+    public volatile int connections, discoveryPings;
+    public volatile String lastClient = "";
+
     private void runHttp() {
         while (alive) {
             try {
                 serverSocket = new ServerSocket();
                 serverSocket.setReuseAddress(true);
                 serverSocket.bind(new InetSocketAddress(httpPort));
+                listening = true;
+                lastError = "";
                 while (alive) {
                     Socket s = serverSocket.accept();
+                    connections++;
+                    lastClient = s.getInetAddress().getHostAddress();
                     pool.execute(() -> handle(s));
                 }
             } catch (IOException e) {
+                listening = false;
+                lastError = e.getClass().getSimpleName() + ": " + e.getMessage();
+                try {
+                    if (serverSocket != null) serverSocket.close();
+                } catch (IOException ignored) {
+                }
                 if (!alive) return;
                 sleep(2000); // port busy (e.g. old instance closing) - retry
             }
@@ -141,6 +157,8 @@ public class CommandServer {
                     udp.receive(p);
                     String msg = new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8).trim();
                     if (!msg.startsWith(DISCOVER_MSG)) continue;
+                    discoveryPings++;
+                    lastClient = p.getAddress().getHostAddress();
                     byte[] reply = (REPLY_MSG + "\n" + name + "\n" + httpPort).getBytes(StandardCharsets.UTF_8);
                     udp.send(new DatagramPacket(reply, reply.length, p.getAddress(), p.getPort()));
                 }

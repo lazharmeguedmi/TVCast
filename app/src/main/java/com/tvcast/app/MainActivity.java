@@ -377,7 +377,13 @@ public class MainActivity extends Activity {
         tvDetail = text("", 13, C_MUTED);
         tvDetail.setPadding(dp(32), dp(4), dp(8), 0);
         tvCard.addView(tvDetail);
-        changeTvBtn = linkButton("Other ways to play (TV media player / web browser)");
+        Button testBtn = linkButton("🩺 Test connection");
+        testBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        testBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        testBtn.setPadding(dp(32), 0, 0, 0);
+        testBtn.setOnClickListener(v -> Target.testConnection(this));
+        tvCard.addView(testBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
+        changeTvBtn = linkButton("Other ways to play (TV address / media player / web browser)");
         changeTvBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         changeTvBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         changeTvBtn.setPadding(dp(32), 0, 0, 0);

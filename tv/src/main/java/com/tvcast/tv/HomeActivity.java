@@ -586,10 +586,32 @@ public class HomeActivity extends Activity {
         } else {
             state = "○  NOT CONNECTED\nOn your phone, open Lazhar TV Cast and tap \"Connect\".";
         }
+        CommandServer srv = ReceiverService.serverRef;
+        String ip = ipAddress();
+        if (srv != null && srv.listening && "checking…".equals(ReceiverService.selfTest)) {
+            ReceiverService.runSelfTest(ip);
+        }
+        String receiver;
+        if (srv == null) {
+            receiver = "✗ Receiver not started";
+        } else if (!srv.listening) {
+            receiver = "✗ Receiver can't start: " + srv.lastError;
+        } else {
+            receiver = "✓ Receiver listening on " + ip + ":" + CommandServer.HTTP_PORT
+                    + "  (self-test: " + ReceiverService.selfTest + ")";
+        }
+        String traffic = "Phone contacts received: " + srv_count(srv)
+                + (srv != null && !srv.lastClient.isEmpty() ? "   ·   last from " + srv.lastClient : "");
         phoneInfo.setText(state + "\n\n"
-                + "This TV:  " + ReceiverService.deviceName(this) + "   ·   " + ipAddress() + "\n\n"
+                + "This TV:  " + ReceiverService.deviceName(this) + "   ·   " + ip + "\n"
+                + receiver + "\n" + traffic + "\n\n"
                 + "Keep Lazhar TV Cast open on the TV while sending from the phone.\n\n"
                 + "Phone app download:\nhttps://github.com/lazharmeguedmi/TVCast/releases/latest/download/TVCast.apk");
+    }
+
+    private static String srv_count(CommandServer srv) {
+        if (srv == null) return "0";
+        return srv.connections + " (searches: " + srv.discoveryPings + ")";
     }
 
     // ---------------- remote: Back ----------------
