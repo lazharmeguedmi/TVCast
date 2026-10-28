@@ -79,7 +79,12 @@ final class Catalog {
                 int n;
                 while ((n = in.read(b)) > 0) out.write(b, 0, n);
             }
-            parse(readFile(tmp)); // make sure it's valid before replacing the cache
+            try {
+                parse(readFile(tmp)); // make sure it's valid before replacing the cache
+            } catch (Exception e) {
+                tmp.delete();
+                throw new IOException("downloaded list was invalid");
+            }
             if (!tmp.renameTo(dest)) throw new IOException("could not save");
         } finally {
             c.disconnect();
