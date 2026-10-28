@@ -10,14 +10,27 @@ android {
         applicationId 'com.tvcast.app'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '2.0'
+    }
+
+    // Fixed key so each new build installs as an update over the previous one.
+    signingConfigs {
+        tvcast {
+            storeFile file('tvcast.keystore')
+            storePassword 'tvcast123'
+            keyAlias 'tvcast'
+            keyPassword 'tvcast123'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.tvcast
+        }
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.tvcast
         }
     }
 
