@@ -2,7 +2,9 @@ package com.tvcast.tv;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -53,6 +55,7 @@ public class HomeActivity extends Activity {
 
     private static final String[][] NAV = {
             {"live", "📡   Live TV"},
+            {"tubi", "🍿   Free on Tubi"},
             {"movies", "🎬   Movies"},
             {"shows", "📺   TV Shows"},
             {"docs", "🌍   Documentaries"},
@@ -128,6 +131,11 @@ public class HomeActivity extends Activity {
                 });
             } catch (Exception e) {
                 err = e.getMessage();
+            }
+            try {
+                Catalog.loadTubi(getApplicationContext(), force);
+            } catch (Exception ignored) {
+                // optional list
             }
             try {
                 Catalog.loadVod(getApplicationContext(), force);
@@ -327,9 +335,11 @@ public class HomeActivity extends Activity {
             return;
         }
         Catalog.Row row = rows.get(rowIndex);
-        headSub.setText(row.name + "  ·  " + row.items.length + " titles  ·  free from the Internet Archive");
+        boolean tubi = sectionId.equals("tubi");
+        headSub.setText(row.name + "  ·  " + row.items.length + " titles  ·  "
+                + (tubi ? "free with ads — plays in the Tubi app" : "free from the Internet Archive"));
         List<Catalog.Title> items = new ArrayList<>();
-        for (int i : row.items) items.add(Catalog.titles.get(i));
+        for (int i : row.items) items.add(s.pool.get(i));
         gridAdapter.set(items);
         grid.setVisibility(View.VISIBLE);
         grid.setSelection(0);
@@ -341,6 +351,7 @@ public class HomeActivity extends Activity {
             case "shows": return "TV Shows";
             case "docs": return "Documentaries";
             case "kids": return "Cartoons";
+            case "tubi": return "Free on Tubi";
             default: return "";
         }
     }
@@ -359,7 +370,8 @@ public class HomeActivity extends Activity {
         TextView title = text(t.title, 24, C_TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         col.addView(title);
-        String meta = (t.year.isEmpty() ? "" : t.year) + (t.seconds > 0 ? (t.year.isEmpty() ? "" : "  ·  ")
+        String meta = t.externalUrl != null ? ("series".equals(t.kind) ? "TV series" : "Movie")
+                + "  ·  Free on Tubi (with ads)" : (t.year.isEmpty() ? "" : t.year) + (t.seconds > 0 ? (t.year.isEmpty() ? "" : "  ·  ")
                 + (t.seconds / 60) + " min" : "");
         TextView m = text(meta, 16, C_MUTED);
         m.setPadding(0, dp(6), 0, dp(10));
@@ -371,7 +383,11 @@ public class HomeActivity extends Activity {
 
         AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setView(v)
-                .setPositiveButton("▶  Play", (di, w) -> {
+                .setPositiveButton(t.externalUrl != null ? "▶  Watch on Tubi" : "▶  Play", (di, w) -> {
+                    if (t.externalUrl != null) {
+                        openInTubi(t);
+                        return;
+                    }
                     startActivity(new Intent(this, TvActivity.class)
                             .putExtra(TvActivity.EXTRA_LOCAL, "vod")
                             .putExtra(TvActivity.EXTRA_TITLE, t.title)
@@ -381,6 +397,51 @@ public class HomeActivity extends Activity {
                 .create();
         dlg.setOnShowListener(x -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus());
         dlg.show();
+    }
+
+    // ----- Tubi -----
+
+    private static final String TUBI_PKG = "com.tubitv";
+
+    /** Opens the title in the Tubi app (Tubi plays it, with its ads). */
+    private void openInTubi(Catalog.Title t) {
+        String type = "series".equals(t.kind) ? "series" : "movie";
+        Intent[] tries = {
+                new Intent(Intent.ACTION_VIEW, Uri.parse(t.externalUrl)).setPackage(TUBI_PKG),
+                new Intent(Intent.ACTION_VIEW, Uri.parse("tubitv://media-details?contentId=" + t.id
+                        + "&contentType=" + type)).setPackage(TUBI_PKG),
+        };
+        for (Intent i : tries) {
+            try {
+                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return;
+            } catch (ActivityNotFoundException | SecurityException ignored) {
+            }
+        }
+        Intent launch = getPackageManager().getLeanbackLaunchIntentForPackage(TUBI_PKG);
+        if (launch == null) launch = getPackageManager().getLaunchIntentForPackage(TUBI_PKG);
+        if (launch != null) {
+            Toast.makeText(this, "Opening Tubi — search for “" + t.title + "”", Toast.LENGTH_LONG).show();
+            startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
+        }
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Tubi isn't installed")
+                .setMessage("Tubi is free. Install it once from the app store, then come back and pick a title.")
+                .setPositiveButton("Install Tubi", (d, w) -> {
+                    String[] stores = {"amzn://apps/android?p=" + TUBI_PKG, "market://details?id=" + TUBI_PKG};
+                    for (String u : stores) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                            return;
+                        } catch (ActivityNotFoundException ignored) {
+                        }
+                    }
+                    Toast.makeText(this, "Search for “Tubi” in the app store", Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("Back", null)
+                .show();
     }
 
     // ----- Search -----
@@ -427,6 +488,11 @@ public class HomeActivity extends Activity {
                 out.add(new Row("🎬   " + t.title, (t.year.isEmpty() ? "" : t.year + "  ·  ") + "Free movie / show",
                         "▸", () -> showTitle(t)));
                 if (++n >= 100) break;
+            }
+        }
+        for (Catalog.Title t : Catalog.tubiTitles) {
+            if (t.title.toLowerCase(Locale.ROOT).contains(q)) {
+                out.add(new Row("🍿   " + t.title, "Free on Tubi", "▸", () -> showTitle(t)));
             }
         }
         if (out.isEmpty()) out.add(new Row("Nothing found for “" + q + "”", "Try another name", null, null));

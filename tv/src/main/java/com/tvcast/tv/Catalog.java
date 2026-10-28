@@ -46,8 +46,11 @@ final class Catalog {
     static final class Title {
         String id, title, year, description, file;
         int seconds;
+        /** For titles that play in another app (Tubi): the page to open and the poster. */
+        String externalUrl, image, kind;
 
         String imageUrl() {
+            if (image != null) return image;
             return "https://archive.org/services/img/" + id;
         }
 
@@ -69,6 +72,8 @@ final class Catalog {
     static final class Section {
         String id, name;
         final List<Row> rows = new ArrayList<>();
+        /** Titles the rows point into. */
+        List<Title> pool = new ArrayList<>();
     }
 
     static volatile List<Channel> channels = new ArrayList<>();
@@ -164,10 +169,54 @@ final class Catalog {
             }
             secs.add(s);
         }
+        for (Section s : secs) s.pool = ts;
         titles = ts;
-        sections = secs;
+        List<Section> all = new ArrayList<>(secs);
+        Section tubi = section("tubi");
+        if (tubi != null) all.add(tubi);
+        sections = all;
         vodUpdated = root.optString("updated");
     }
+
+    /** "Free on Tubi": what's on Tubi now; plays in the Tubi app. */
+    static void loadTubi(Context ctx, boolean force) throws Exception {
+        JSONObject root = new JSONObject(fetch(ctx, "tubi.json", force));
+        List<Title> ts = new ArrayList<>();
+        JSONArray a = root.getJSONArray("items");
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject o = a.getJSONObject(i);
+            Title t = new Title();
+            t.id = o.optString("id");
+            t.title = o.optString("t");
+            t.year = "";
+            t.description = o.isNull("d") ? "" : o.optString("d");
+            t.externalUrl = o.optString("u");
+            t.image = o.isNull("i") ? null : o.optString("i");
+            t.kind = o.optString("k");
+            ts.add(t);
+        }
+        Section s = new Section();
+        s.id = "tubi";
+        s.name = "Free on Tubi";
+        s.pool = ts;
+        JSONArray rows = root.getJSONArray("rows");
+        for (int j = 0; j < rows.length(); j++) {
+            JSONObject r = rows.getJSONObject(j);
+            Row row = new Row();
+            row.name = r.optString("name");
+            JSONArray it = r.getJSONArray("items");
+            row.items = new int[it.length()];
+            for (int k = 0; k < it.length(); k++) row.items[k] = it.getInt(k);
+            s.rows.add(row);
+        }
+        List<Section> all = new ArrayList<>();
+        for (Section x : sections) if (!x.id.equals("tubi")) all.add(x);
+        all.add(s);
+        sections = all;
+        tubiTitles = ts;
+    }
+
+    static volatile List<Title> tubiTitles = new ArrayList<>();
 
     static Section section(String id) {
         for (Section s : sections) if (s.id.equals(id)) return s;
