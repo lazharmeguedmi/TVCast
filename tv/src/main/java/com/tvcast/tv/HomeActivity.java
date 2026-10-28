@@ -337,7 +337,7 @@ public class HomeActivity extends Activity {
         Catalog.Row row = rows.get(rowIndex);
         boolean tubi = sectionId.equals("tubi");
         headSub.setText(row.name + "  ·  " + row.items.length + " titles  ·  "
-                + (tubi ? "free with ads — plays in the Tubi app" : "free from the Internet Archive"));
+                + (tubi ? "press OK to play · Back returns here" : "free from the Internet Archive"));
         List<Catalog.Title> items = new ArrayList<>();
         for (int i : row.items) items.add(s.pool.get(i));
         gridAdapter.set(items);
@@ -492,7 +492,7 @@ public class HomeActivity extends Activity {
         }
         for (Catalog.Title t : Catalog.tubiTitles) {
             if (t.title.toLowerCase(Locale.ROOT).contains(q)) {
-                out.add(new Row("🍿   " + t.title, "Free on Tubi", "▸", () -> showTitle(t)));
+                out.add(new Row("🍿   " + t.title, "Free on Tubi", "▶", () -> openInTubi(t)));
             }
         }
         if (out.isEmpty()) out.add(new Row("Nothing found for “" + q + "”", "Try another name", null, null));
@@ -688,7 +688,11 @@ public class HomeActivity extends Activity {
         grid.setSelector(focusBorder());
         grid.setDrawSelectorOnTop(true);
         grid.setAdapter(gridAdapter);
-        grid.setOnItemClickListener((p, v, pos, id) -> showTitle(gridAdapter.items.get(pos)));
+        grid.setOnItemClickListener((p, v, pos, id) -> {
+            Catalog.Title t = gridAdapter.items.get(pos);
+            if (t.externalUrl != null) openInTubi(t); // one click: straight into the movie
+            else showTitle(t);
+        });
         grid.setPadding(dp(4), dp(4), dp(4), dp(4));
         grid.setClipToPadding(false);
         body.addView(grid, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
