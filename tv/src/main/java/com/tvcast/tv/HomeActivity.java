@@ -406,10 +406,11 @@ public class HomeActivity extends Activity {
     /** Opens the title in the Tubi app (Tubi plays it, with its ads). */
     private void openInTubi(Catalog.Title t) {
         String type = "series".equals(t.kind) ? "series" : "movie";
+        // tubitv://media-details is the link Tubi's own website uses to open a title in the app
         Intent[] tries = {
+                new Intent(Intent.ACTION_VIEW, Uri.parse("tubitv://media-details?contentType=" + type
+                        + "&contentId=" + t.id)).setPackage(TUBI_PKG),
                 new Intent(Intent.ACTION_VIEW, Uri.parse(t.externalUrl)).setPackage(TUBI_PKG),
-                new Intent(Intent.ACTION_VIEW, Uri.parse("tubitv://media-details?contentId=" + t.id
-                        + "&contentType=" + type)).setPackage(TUBI_PKG),
         };
         for (Intent i : tries) {
             try {
