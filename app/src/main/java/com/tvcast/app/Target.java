@@ -156,7 +156,7 @@ final class Target {
         final List<String> labels = new ArrayList<>();
         for (TvApps.Tv tv : tvs) {
             options.add(app(tv));
-            labels.add("📺  " + tv.name + "  (TV Cast app — recommended)");
+            labels.add("📺  " + tv.name + "  (Lazhar TV Cast app — recommended)");
         }
         for (Dlna.Renderer r : renderers) {
             options.add(dlna(r));

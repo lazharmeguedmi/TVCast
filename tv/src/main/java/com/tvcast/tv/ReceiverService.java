@@ -33,6 +33,8 @@ public class ReceiverService extends Service implements CommandServer.Handler {
     static volatile String pendingCmd;
     static volatile Map<String, String> pendingParams;
     static volatile String lastPlayId = "";
+    /** The menus are on screen (the app is open and ready). */
+    static volatile boolean homeVisible;
 
     private static final String CHANNEL = "tvcast-tv";
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -59,13 +61,13 @@ public class ReceiverService extends Service implements CommandServer.Handler {
                     NotificationManager.IMPORTANCE_MIN));
             n = new Notification.Builder(this, CHANNEL)
                     .setSmallIcon(R.drawable.ic_launcher)
-                    .setContentTitle("TV Cast is ready")
+                    .setContentTitle("Lazhar TV Cast is ready")
                     .setContentText("Waiting for your phone")
                     .build();
         } else {
             n = new Notification.Builder(this)
                     .setSmallIcon(R.drawable.ic_launcher)
-                    .setContentTitle("TV Cast is ready")
+                    .setContentTitle("Lazhar TV Cast is ready")
                     .build();
         }
         try {
@@ -106,6 +108,9 @@ public class ReceiverService extends Service implements CommandServer.Handler {
         Player p = player;
         if (cmd.equals("status")) {
             if (p != null) return p.status();
+            if (homeVisible) {
+                return "{\"visible\":true,\"state\":\"idle\",\"id\":" + CommandServer.json(lastPlayId) + "}";
+            }
             return "{\"visible\":false,\"state\":\"idle\",\"id\":" + CommandServer.json(lastPlayId) + "}";
         }
         switch (cmd) {

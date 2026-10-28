@@ -50,6 +50,10 @@ SECTIONS = [
     ]),
 ]
 
+ADULT = re.compile(r"\b(sex\w*|nude|nudes|nudity|nudist\w*|naked|erotic\w*|porn\w*|xxx|strip|stripper\w*|striptease|burlesque|"
+                   r"adult|adults only|exploitation|sexploitation|stag|pin-?up|lingerie|vice|marihuana|marijuana|"
+                   r"reefer|drug|cocaine)\b", re.I)
+
 PREFERRED_FORMATS = ["h.264", "h.264 HD", "MPEG4", "h.264 IA", "512Kb MPEG4"]
 
 
@@ -104,6 +108,12 @@ def details(ident):
     if not d or "files" not in d:
         return None
     md = d.get("metadata", {})
+    subj = md.get("subject") or ""
+    if isinstance(subj, list):
+        subj = " ".join(str(x) for x in subj)
+    title_text = md.get("title") if not isinstance(md.get("title"), list) else " ".join(md.get("title"))
+    if ADULT.search(str(title_text or "")) or ADULT.search(str(subj)) or str(md.get("noindex", "")).lower() == "true":
+        return None  # keep the list family-friendly
     best = None
     for rank, fmt in enumerate(PREFERRED_FORMATS):
         for f in d["files"]:

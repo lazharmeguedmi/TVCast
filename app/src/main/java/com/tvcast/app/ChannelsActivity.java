@@ -212,7 +212,7 @@ public class ChannelsActivity extends Activity {
         if (t == null) {
             new AlertDialog.Builder(this)
                     .setTitle("TV not found")
-                    .setMessage("Open the TV Cast app on your TV (same Wi-Fi as this phone), then try again.\n\n"
+                    .setMessage("Open the Lazhar TV Cast app on your TV (same Wi-Fi as this phone), then try again.\n\n"
                             + "Don't have it on the TV yet? Open Downloader on the TV and enter:\n"
                             + MainActivity.TV_APP_LINK)
                     .setPositiveButton("Search again", (d, w) -> discoverTvs())

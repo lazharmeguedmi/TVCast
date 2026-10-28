@@ -204,7 +204,7 @@ public class MainActivity extends Activity {
     private void showNoTvDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("TV not found")
-                .setMessage("Open the TV Cast app on your TV (same Wi-Fi as this phone), then tap Search again.\n\n"
+                .setMessage("Open the Lazhar TV Cast app on your TV (same Wi-Fi as this phone), then tap Search again.\n\n"
                         + "Don't have it on the TV yet? Open Downloader on the TV and enter:\n" + TV_APP_LINK)
                 .setPositiveButton("Search again", (d, w) -> {
                     waitingToSend = true;
@@ -316,7 +316,7 @@ public class MainActivity extends Activity {
         col.setPadding(dp(20), dp(24), dp(20), dp(32));
         scroll.addView(col);
 
-        TextView title = text("TV Cast", 30, C_TEXT);
+        TextView title = text("Lazhar TV Cast", 30, C_TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         col.addView(title);
 
@@ -457,7 +457,7 @@ public class MainActivity extends Activity {
         mp.topMargin = dp(18);
         col.addView(more, mp);
 
-        TextView help = text("Get TV Cast on your TV: open Downloader on the TV and enter\n" + TV_APP_LINK,
+        TextView help = text("Get Lazhar TV Cast on your TV: open Downloader on the TV and enter\n" + TV_APP_LINK,
                 12, C_MUTED);
         help.setTextIsSelectable(true);
         help.setPadding(dp(4), dp(24), dp(4), 0);

@@ -17,15 +17,16 @@
         android:allowBackup="false"
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_launcher"
-        android:label="TV Cast"
+        android:label="Lazhar TV Cast"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
         <activity
-            android:name=".TvActivity"
+            android:name=".HomeActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
+            android:windowSoftInputMode="adjustNothing"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -33,6 +34,13 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".TvActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode" />
 
         <service
             android:name=".ReceiverService"
