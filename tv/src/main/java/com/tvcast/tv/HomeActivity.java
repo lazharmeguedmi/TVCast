@@ -401,45 +401,77 @@ public class HomeActivity extends Activity {
 
     // ----- Tubi -----
 
-    private static final String TUBI_PKG = "com.tubitv";
+    /**
+     * Finds the installed Tubi app. Fire TV's Tubi uses a different package name than the
+     * Google Play version, so look it up instead of assuming one.
+     */
+    private String findTubiPackage() {
+        android.content.pm.PackageManager pm = getPackageManager();
+        // 1. whoever handles Tubi's own app links
+        try {
+            android.content.pm.ResolveInfo r = pm.resolveActivity(
+                    new Intent(Intent.ACTION_VIEW, Uri.parse("tubitv://media-details")), 0);
+            if (r != null && r.activityInfo != null && !"android".equals(r.activityInfo.packageName)) {
+                return r.activityInfo.packageName;
+            }
+        } catch (Exception ignored) {
+        }
+        // 2. any installed app named Tubi
+        String[] cats = {"android.intent.category.LEANBACK_LAUNCHER", Intent.CATEGORY_LAUNCHER};
+        for (String cat : cats) {
+            try {
+                for (android.content.pm.ResolveInfo ri : pm.queryIntentActivities(
+                        new Intent(Intent.ACTION_MAIN).addCategory(cat), 0)) {
+                    String pkg = ri.activityInfo.packageName;
+                    String label = String.valueOf(ri.loadLabel(pm));
+                    if (pkg.toLowerCase(Locale.ROOT).contains("tubi")
+                            || label.toLowerCase(Locale.ROOT).startsWith("tubi")) {
+                        return pkg;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private boolean tryStart(Intent i) {
+        try {
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            return false;
+        }
+    }
 
     /** Opens the title in the Tubi app (Tubi plays it, with its ads). */
     private void openInTubi(Catalog.Title t) {
         String type = "series".equals(t.kind) ? "series" : "movie";
         // tubitv://media-details is the link Tubi's own website uses to open a title in the app
-        Intent[] tries = {
-                new Intent(Intent.ACTION_VIEW, Uri.parse("tubitv://media-details?contentType=" + type
-                        + "&contentId=" + t.id)).setPackage(TUBI_PKG),
-                new Intent(Intent.ACTION_VIEW, Uri.parse(t.externalUrl)).setPackage(TUBI_PKG),
-        };
-        for (Intent i : tries) {
-            try {
-                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        Uri deep = Uri.parse("tubitv://media-details?contentType=" + type + "&contentId=" + t.id);
+        String pkg = findTubiPackage();
+        if (pkg != null) {
+            if (tryStart(new Intent(Intent.ACTION_VIEW, deep).setPackage(pkg))) return;
+            if (tryStart(new Intent(Intent.ACTION_VIEW, Uri.parse(t.externalUrl)).setPackage(pkg))) return;
+        }
+        if (tryStart(new Intent(Intent.ACTION_VIEW, deep))) return;
+        if (pkg != null) {
+            Intent launch = getPackageManager().getLeanbackLaunchIntentForPackage(pkg);
+            if (launch == null) launch = getPackageManager().getLaunchIntentForPackage(pkg);
+            if (launch != null && tryStart(launch)) {
+                Toast.makeText(this, "Opening Tubi — search for “" + t.title + "”", Toast.LENGTH_LONG).show();
                 return;
-            } catch (ActivityNotFoundException | SecurityException ignored) {
             }
         }
-        Intent launch = getPackageManager().getLeanbackLaunchIntentForPackage(TUBI_PKG);
-        if (launch == null) launch = getPackageManager().getLaunchIntentForPackage(TUBI_PKG);
-        if (launch != null) {
-            Toast.makeText(this, "Opening Tubi — search for “" + t.title + "”", Toast.LENGTH_LONG).show();
-            startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            return;
-        }
         new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("Tubi isn't installed")
-                .setMessage("Tubi is free. Install it once from the app store, then come back and pick a title.")
-                .setPositiveButton("Install Tubi", (d, w) -> {
-                    String[] stores = {"amzn://apps/android?p=" + TUBI_PKG, "market://details?id=" + TUBI_PKG};
-                    for (String u : stores) {
-                        try {
-                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                            return;
-                        } catch (ActivityNotFoundException ignored) {
-                        }
+                .setTitle("Couldn't open Tubi")
+                .setMessage("Lazhar TV Cast couldn't find the Tubi app on this device.\n"
+                        + "If Tubi is installed, open it from the home screen and search for “" + t.title + "”.")
+                .setPositiveButton("Find Tubi in the Appstore", (d, w) -> {
+                    if (!tryStart(new Intent(Intent.ACTION_VIEW, Uri.parse("amzn://apps/android?s=tubi")))
+                            && !tryStart(new Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=tubi")))) {
+                        Toast.makeText(this, "Search for “Tubi” in the app store", Toast.LENGTH_LONG).show();
                     }
-                    Toast.makeText(this, "Search for “Tubi” in the app store", Toast.LENGTH_LONG).show();
                 })
                 .setNegativeButton("Back", null)
                 .show();

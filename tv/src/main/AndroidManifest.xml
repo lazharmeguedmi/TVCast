@@ -13,6 +13,18 @@
     <!-- lets the app check for / open the Tubi app (Android 11+) -->
     <queries>
         <package android:name="com.tubitv" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tubitv" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
