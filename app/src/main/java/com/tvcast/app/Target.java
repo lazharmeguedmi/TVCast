@@ -268,6 +268,7 @@ final class Target {
 
     private static String tcp(String host, int port) {
         try (java.net.Socket s = new java.net.Socket(java.net.Proxy.NO_PROXY)) {
+            TvApps.opener.bind(s);
             s.connect(new java.net.InetSocketAddress(host, port), 2500);
             return "open";
         } catch (java.net.ConnectException e) {
@@ -287,7 +288,9 @@ final class Target {
         String phoneUrl = CastService.serverUrl();
         String phoneIp = phoneUrl == null ? null : phoneUrl.replace("http://", "").replace(":" + CastService.PORT, "");
         r.append("This phone: ").append(phoneIp == null ? "NOT on Wi-Fi" : phoneIp).append('\n');
-        r.append("TV: ").append(host).append("\n\n");
+        r.append("TV: ").append(host).append('\n');
+        boolean vpn = LanNetwork.vpnActive(ctx);
+        r.append("VPN on this phone: ").append(vpn ? "YES" : "no").append("\n\n");
         if (phoneIp == null) {
             return r.append("➜ Turn on Wi-Fi on the phone and join the same network as the TV.").toString();
         }
@@ -330,6 +333,9 @@ final class Target {
         } else if (tvSeen) {
             r.append("➜ The TV is reachable, but the Lazhar TV Cast receiver isn't running.\n"
                     + "Open Lazhar TV Cast on the TV, go to 📱 Phone / Mirror and check the \"Receiver\" line.");
+        } else if (vpn) {
+            r.append("➜ A VPN is on and is blocking your TV. Turn it off: Settings → Network & internet → VPN "
+                    + "(on Pixel, also turn off \"VPN by Google\"), or allow \"local network / LAN\" in your VPN app.");
         } else if (!sameNet) {
             r.append("➜ The phone and TV are on DIFFERENT networks. Connect both to the same Wi-Fi name "
                     + "(not a guest network). Check the TV under Settings → Network.");

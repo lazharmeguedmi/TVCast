@@ -110,6 +110,7 @@ public class TvActivity extends Activity implements ReceiverService.Player {
         if (local == null) return;
         i.removeExtra(EXTRA_LOCAL);
         fromPhone = false;
+        LanNet.useWifiForPhone(this, false);
         if (local.equals("live")) {
             playChannel(queuePos);
         } else {
@@ -142,6 +143,7 @@ public class TvActivity extends Activity implements ReceiverService.Player {
         if (ReceiverService.player == this) ReceiverService.player = null;
         main.removeCallbacks(ticker);
         stopAll();
+        LanNet.useWifiForPhone(this, false);
         finish(); // pressing Home ends playback; Back to menus next time
     }
 
@@ -192,6 +194,7 @@ public class TvActivity extends Activity implements ReceiverService.Player {
             case "play":
                 fromPhone = true;
                 localLive = false;
+                LanNet.useWifiForPhone(this, true);
                 sId = p.get("id") == null ? "" : p.get("id");
                 startPlayer(p.get("kind"), p.get("url"), p.get("title"), "", "", sId);
                 break;

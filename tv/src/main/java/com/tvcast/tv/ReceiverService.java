@@ -189,8 +189,8 @@ public class ReceiverService extends Service implements CommandServer.Handler {
         boolean reverse = false;
         String reverseError = "";
         try {
-            java.net.HttpURLConnection c = (java.net.HttpURLConnection)
-                    new java.net.URL("http://" + ip + ":" + port + "/ping").openConnection();
+            java.net.HttpURLConnection c = LanNet.open(this,
+                    new java.net.URL("http://" + ip + ":" + port + "/ping"));
             c.setConnectTimeout(3000);
             c.setReadTimeout(3000);
             reverse = c.getResponseCode() == 200;

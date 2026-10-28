@@ -602,6 +602,10 @@ public class HomeActivity extends Activity {
         }
         String traffic = "Phone contacts received: " + srv_count(srv)
                 + (srv != null && !srv.lastClient.isEmpty() ? "   ·   last from " + srv.lastClient : "");
+        if (LanNet.vpnActive(this)) {
+            traffic += "\n⚠  A VPN app is running on this Fire TV — if the phone can't connect, allow "
+                    + "\"local network / LAN\" in the VPN app or turn it off.";
+        }
         phoneInfo.setText(state + "\n\n"
                 + "This TV:  " + ReceiverService.deviceName(this) + "   ·   " + ip + "\n"
                 + receiver + "\n" + traffic + "\n\n"

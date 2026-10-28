@@ -92,6 +92,10 @@ final class Connection {
                 state = NOT_FOUND;
                 detail = "Can't reach Lazhar TV Cast on the TV. Make sure the TV is on and the app is open.";
             } finally {
+                if (state == NOT_FOUND && LanNetwork.vpnActive(app)) {
+                    detail = "A VPN is on and blocks your TV. Turn it off in Settings → Network & internet → VPN "
+                            + "(on Pixel also \"VPN by Google\"), then tap Connect.";
+                }
                 busy = false;
                 if (done != null) main.post(done);
             }

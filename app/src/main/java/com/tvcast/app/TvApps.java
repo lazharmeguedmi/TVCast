@@ -48,10 +48,35 @@ public final class TvApps {
     private TvApps() {
     }
 
+    /** How connections to the TV are opened (the Android app routes them over the home Wi-Fi). */
+    public interface Opener {
+        HttpURLConnection open(URL url) throws IOException;
+
+        void bind(DatagramSocket s);
+
+        void bind(java.net.Socket s);
+    }
+
+    public static volatile Opener opener = new Opener() {
+        @Override
+        public HttpURLConnection open(URL url) throws IOException {
+            return (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
+        }
+
+        @Override
+        public void bind(DatagramSocket s) {
+        }
+
+        @Override
+        public void bind(java.net.Socket s) {
+        }
+    };
+
     /** Broadcasts on the Wi-Fi and collects TVs that answer. Also checks {@code knownHosts} directly. */
     public static List<Tv> find(int timeoutMs, List<String> knownHosts) {
         Map<String, Tv> found = new LinkedHashMap<>();
         try (DatagramSocket sock = new DatagramSocket()) {
+            opener.bind(sock);
             sock.setBroadcast(true);
             sock.setSoTimeout(200);
             byte[] msg = "TVCAST_DISCOVER".getBytes(StandardCharsets.UTF_8);
@@ -163,7 +188,7 @@ public final class TvApps {
     }
 
     static String get(String url, int timeoutMs) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(Proxy.NO_PROXY);
+        HttpURLConnection c = opener.open(new URL(url));
         try {
             c.setConnectTimeout(timeoutMs);
             c.setReadTimeout(timeoutMs);
