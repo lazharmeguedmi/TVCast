@@ -1,9 +1,13 @@
-name: Update channel list
+name: Update channel and movie lists
 
 on:
   schedule:
     - cron: '17 6 * * *'   # every day
   workflow_dispatch:
+  push:
+    paths:
+      - 'tools/**'
+      - '.github/workflows/catalog.yml'
 
 permissions:
   contents: write
@@ -16,12 +20,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build catalog from iptv-org
-        run: python3 tools/build_catalog.py
+      - name: Build live TV channel list (iptv-org)
+        run: |
+          python3 tools/build_catalog.py
+          python3 -c "import json;c=json.load(open('catalog/channels.json'));print('::notice::Channels:',len(c['channels']),'languages:',len(c['languages']))"
+      - name: Build movies / shows / documentaries list (Internet Archive)
+        continue-on-error: true
+        run: python3 tools/build_vod.py
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add catalog/channels.json
-          git diff --cached --quiet || git commit -m "Update channel list"
+          git add catalog/
+          git diff --cached --quiet || git commit -m "Update channel and movie lists"
+          git pull --rebase
           git push
