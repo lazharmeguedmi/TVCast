@@ -27,6 +27,9 @@ jobs:
       - name: Build movies / shows / documentaries list (Internet Archive)
         continue-on-error: true
         run: python3 tools/build_vod.py
+      - name: Build "Free on Tubi" list (tubitv.com public pages)
+        continue-on-error: true
+        run: python3 tools/build_tubi.py
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
